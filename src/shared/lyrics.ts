@@ -74,5 +74,50 @@ export function normalizeLyricsDraft(text: string): string {
   const normalized = text.replace(/\r\n?/g, '\n').trim()
   if (!normalized) return ''
   if (normalized.split('\n').some((line) => SECTION_HEADER.test(line.trim()))) return normalized
-  return `[verse 1]\n${normalized}`
+
+  type Section = { label: string; lines: string[] }
+  const sections: Section[] = []
+  let active: Section | null = null
+  let chorusNumber = 0
+  const startSection = (label: string): Section => {
+    const section = { label, lines: [] }
+    active = section
+    return section
+  }
+  const finishSection = (splitUnlabelledRefrain = false) => {
+    if (!active) return
+    const lines = active.lines.filter(Boolean)
+    if (splitUnlabelledRefrain && /^verse \d+$/i.test(active.label) && lines.length === 8) {
+      sections.push({ label: active.label, lines: lines.slice(0, 4) })
+      chorusNumber += 1
+      sections.push({ label: `chorus ${chorusNumber}`, lines: lines.slice(4) })
+    } else if (lines.length) {
+      sections.push({ label: active.label, lines })
+    }
+    active = null
+  }
+
+  for (const rawLine of normalized.split('\n')) {
+    const line = rawLine.trim()
+    if (!line) continue
+    const refrain = line.match(/^(?:refrain|chorus)\s*:?\s*(.*)$/i)
+    if (refrain) {
+      finishSection()
+      chorusNumber += 1
+      const section = startSection(`chorus ${chorusNumber}`)
+      if (refrain[1]) section.lines.push(refrain[1])
+      continue
+    }
+    const verse = line.match(/^(\d{1,2})\s*[.)]?\s*(.*)$/)
+    if (verse && (!verse[2] || verse[2].trim().length > 2)) {
+      finishSection(true)
+      const section = startSection(`verse ${verse[1]}`)
+      if (verse[2].trim()) section.lines.push(verse[2].trim())
+      continue
+    }
+    const section = active ?? startSection('verse 1')
+    section.lines.push(line)
+  }
+  finishSection()
+  return sections.map((section) => `[${section.label}]\n${section.lines.join('\n')}`).join('\n\n')
 }

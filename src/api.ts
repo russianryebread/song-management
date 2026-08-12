@@ -58,6 +58,26 @@ export type LyricCandidate = {
   message?: string
 }
 
+export type TrustedSource = {
+  id: string
+  name: string
+  baseUrl: string
+  enabled: boolean
+}
+
+export type AppSettings = {
+  groupName: string
+  defaultTextScale: number
+  defaultRepeatChorus: boolean
+  defaultShowSlideCount: boolean
+}
+
+export type UserAccount = {
+  id: string
+  email: string
+  createdAt: string
+}
+
 type ApiError = Error & { status?: number }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {

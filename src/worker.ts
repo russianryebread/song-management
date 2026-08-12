@@ -15,6 +15,8 @@ type Variables = { userId: string }
 type App = Hono<{ Bindings: Bindings; Variables: Variables }>
 type JsonRecord = Record<string, unknown>
 type AiBinding = { run(model: string, inputs: Record<string, unknown>): Promise<unknown> }
+type TrustedSource = { id: string; name: string; base_url: string; enabled: number }
+type AppSettings = { group_name: string; default_text_scale: number; default_repeat_chorus: number; default_show_slide_count: number }
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 const encoder = new TextEncoder()
@@ -117,6 +119,20 @@ function serializeSong(row: any) {
   }
 }
 
+function serializeSettings(row: AppSettings) {
+  return {
+    groupName: row.group_name,
+    defaultTextScale: Number(row.default_text_scale),
+    defaultRepeatChorus: Boolean(row.default_repeat_chorus),
+    defaultShowSlideCount: Boolean(row.default_show_slide_count),
+  }
+}
+
+async function appSettings(db: D1Database): Promise<AppSettings> {
+  const found = await db.prepare('SELECT group_name, default_text_scale, default_repeat_chorus, default_show_slide_count FROM app_settings WHERE id = 1').first<AppSettings>()
+  return found ?? { group_name: 'Men’s group', default_text_scale: 1, default_repeat_chorus: 0, default_show_slide_count: 1 }
+}
+
 function parseLines(value: unknown): string[] | null {
   if (!Array.isArray(value) || value.length < 1 || value.length > 4 || value.some((line) => typeof line !== 'string' || !line.trim())) return null
   return value.map((line) => line.trim())
@@ -128,6 +144,58 @@ function normalizeTitle(title: string): string {
 
 function songDedupeKey(title: string, hymnNumber: string | null): string {
   return `${hymnNumber ?? ''}|${normalizeTitle(title)}`
+}
+
+function normalizedHost(baseUrl: string): string | null {
+  try { return new URL(baseUrl).hostname.replace(/^www\./, '').toLowerCase() } catch { return null }
+}
+
+function isTrustedUrl(value: string, sources: TrustedSource[]): boolean {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'https:') return false
+    const host = url.hostname.replace(/^www\./, '').toLowerCase()
+    return sources.some((source) => source.enabled && normalizedHost(source.base_url) === host)
+  } catch { return false }
+}
+
+function stripHtml(value: string): string {
+  return value
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, '\n')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&[a-z]+;/gi, ' ')
+}
+
+function textAroundLyricStart(html: string): string {
+  const plain = stripHtml(html).replace(/\r\n?/g, '\n')
+  const match = plain.search(/(?:^|\n)\s*(?:1\s*[.)]|verse\s*1\b|refrain\s*:)/im)
+  const excerpt = match >= 0 ? plain.slice(match, match + 18_000) : plain.slice(0, 18_000)
+  return excerpt.split('\n').map((line) => line.trim()).filter(Boolean).join('\n')
+}
+
+async function trustedSources(db: D1Database, includeDisabled = false): Promise<TrustedSource[]> {
+  const query = includeDisabled
+    ? 'SELECT id, name, base_url, enabled FROM trusted_sources ORDER BY name'
+    : 'SELECT id, name, base_url, enabled FROM trusted_sources WHERE enabled = 1 ORDER BY name'
+  return (await db.prepare(query).all<TrustedSource>()).results
+}
+
+async function fetchTrustedText(url: string, sources: TrustedSource[]): Promise<string> {
+  if (!isTrustedUrl(url, sources)) throw new Error('That URL is not in your trusted source list.')
+  const response = await fetch(url, { headers: { Accept: 'text/html,application/xhtml+xml,application/pdf;q=0.7' }, redirect: 'follow' })
+  if (!response.ok) throw new Error(`The trusted source returned ${response.status}.`)
+  const finalUrl = response.url || url
+  if (!isTrustedUrl(finalUrl, sources)) throw new Error('The trusted source redirected to an unapproved URL.')
+  const type = response.headers.get('content-type') ?? ''
+  if (!/html|text\//i.test(type)) throw new Error('This trusted page is not HTML. Paste its authorized lyrics into the editor instead.')
+  const text = textAroundLyricStart(await response.text())
+  if (text.length < 20) throw new Error('No usable lyric text was found on that page.')
+  return text
 }
 
 function words(text: string): string[] {
@@ -286,6 +354,51 @@ app.get('/api/session', requireAuth, async (c) => {
   return c.json({ authenticated: true, email: user?.email ?? null, user })
 })
 
+app.get('/api/settings', requireAuth, async (c) => c.json({ settings: serializeSettings(await appSettings(c.env.DB)) }))
+
+app.patch('/api/settings', requireAuth, async (c) => {
+  const body = await readJson(c)
+  const current = await appSettings(c.env.DB)
+  const groupName = body?.groupName === undefined ? current.group_name : stringField(body.groupName, 'groupName', { required: true, max: 100 })
+  const defaultTextScale = body?.defaultTextScale === undefined ? Number(current.default_text_scale) : body.defaultTextScale
+  const defaultRepeatChorus = body?.defaultRepeatChorus === undefined ? Boolean(current.default_repeat_chorus) : body.defaultRepeatChorus
+  const defaultShowSlideCount = body?.defaultShowSlideCount === undefined ? Boolean(current.default_show_slide_count) : body.defaultShowSlideCount
+  if (!groupName || typeof defaultTextScale !== 'number' || !Number.isFinite(defaultTextScale) || defaultTextScale < .75 || defaultTextScale > 1.35 || typeof defaultRepeatChorus !== 'boolean' || typeof defaultShowSlideCount !== 'boolean') return jsonError(c, 'The settings are invalid.')
+  const updated: AppSettings = { group_name: groupName, default_text_scale: defaultTextScale, default_repeat_chorus: defaultRepeatChorus ? 1 : 0, default_show_slide_count: defaultShowSlideCount ? 1 : 0 }
+  await c.env.DB.prepare(
+    `INSERT INTO app_settings (id, group_name, default_text_scale, default_repeat_chorus, default_show_slide_count, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET group_name = excluded.group_name, default_text_scale = excluded.default_text_scale, default_repeat_chorus = excluded.default_repeat_chorus, default_show_slide_count = excluded.default_show_slide_count, updated_at = excluded.updated_at`,
+  ).bind(updated.group_name, updated.default_text_scale, updated.default_repeat_chorus, updated.default_show_slide_count, new Date().toISOString()).run()
+  return c.json({ settings: serializeSettings(updated) })
+})
+
+app.get('/api/users', requireAuth, async (c) => {
+  const users = await c.env.DB.prepare('SELECT id, email, created_at FROM users ORDER BY created_at ASC').all<{ id: string; email: string; created_at: string }>()
+  return c.json({ users: users.results.map((user) => ({ id: user.id, email: user.email, createdAt: user.created_at })) })
+})
+
+app.post('/api/users', requireAuth, async (c) => {
+  const body = await readJson(c)
+  const email = stringField(body?.email, 'email', { required: true, max: 320 })?.toLowerCase()
+  const password = stringField(body?.password, 'password', { required: true, max: 1_000 })
+  if (!email || !/^\S+@\S+\.\S+$/.test(email) || !password || password.length < 12) return jsonError(c, 'Enter a valid email and a password with at least 12 characters.')
+  const user = { id: id(), email, createdAt: new Date().toISOString() }
+  try {
+    await c.env.DB.prepare('INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)').bind(user.id, user.email, await passwordHash(password), user.createdAt).run()
+  } catch { return jsonError(c, 'A user with that email already exists.', 409) }
+  return c.json({ user }, 201)
+})
+
+app.delete('/api/users/:id', requireAuth, async (c) => {
+  const userId = c.req.param('id')
+  if (userId === c.get('userId')) return jsonError(c, 'You cannot remove the account currently in use.', 409)
+  const total = await c.env.DB.prepare('SELECT COUNT(*) AS count FROM users').first<{ count: number }>()
+  if (Number(total?.count ?? 0) <= 1) return jsonError(c, 'Keep at least one administrator account.', 409)
+  const result = await c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(userId).run()
+  return result.meta.changes ? c.body(null, 204) : jsonError(c, 'User not found.', 404)
+})
+
 app.use('/api/*', async (c, next) => {
   // The projector URL is deliberately bearer-token scoped so a second display
   // never needs the admin's session cookie. Login/logout are also public.
@@ -371,6 +484,50 @@ app.get('/api/songs/:id/history', async (c) => {
   return c.json({ song: serializeSong(song), meetings: rows.results })
 })
 
+app.get('/api/trusted-sources', async (c) => {
+  const sources = await trustedSources(c.env.DB, true)
+  return c.json({ sources: sources.map((source) => ({ id: source.id, name: source.name, baseUrl: source.base_url, enabled: Boolean(source.enabled) })) })
+})
+
+app.post('/api/trusted-sources', async (c) => {
+  const body = await readJson(c)
+  const name = stringField(body?.name, 'name', { required: true, max: 100 })
+  const rawUrl = stringField(body?.baseUrl, 'baseUrl', { required: true, max: 2_000 })
+  if (!name || !rawUrl) return jsonError(c, 'A source name and HTTPS URL are required.')
+  let parsed: URL
+  try { parsed = new URL(rawUrl) } catch { return jsonError(c, 'Enter a valid HTTPS URL.') }
+  if (parsed.protocol !== 'https:' || !parsed.hostname) return jsonError(c, 'Trusted sources must use HTTPS.')
+  const source = { id: id(), name, baseUrl: `${parsed.origin}/`, enabled: true }
+  const now = new Date().toISOString()
+  try {
+    await c.env.DB.prepare('INSERT INTO trusted_sources (id, name, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)').bind(source.id, source.name, source.baseUrl, now, now).run()
+  } catch { return jsonError(c, 'That trusted source URL already exists.', 409) }
+  return c.json({ source }, 201)
+})
+
+app.patch('/api/trusted-sources/:id', async (c) => {
+  const source = await c.env.DB.prepare('SELECT * FROM trusted_sources WHERE id = ?').bind(c.req.param('id')).first<TrustedSource>()
+  if (!source) return jsonError(c, 'Trusted source not found.', 404)
+  const body = await readJson(c)
+  const name = body?.name === undefined ? source.name : stringField(body.name, 'name', { required: true, max: 100 })
+  const enabled = body?.enabled === undefined ? Boolean(source.enabled) : body.enabled
+  const rawUrl = body?.baseUrl === undefined ? source.base_url : stringField(body.baseUrl, 'baseUrl', { required: true, max: 2_000 })
+  if (!name || !rawUrl || typeof enabled !== 'boolean') return jsonError(c, 'The source details are invalid.')
+  let parsed: URL
+  try { parsed = new URL(rawUrl) } catch { return jsonError(c, 'Enter a valid HTTPS URL.') }
+  if (parsed.protocol !== 'https:' || !parsed.hostname) return jsonError(c, 'Trusted sources must use HTTPS.')
+  const baseUrl = `${parsed.origin}/`
+  try {
+    await c.env.DB.prepare('UPDATE trusted_sources SET name = ?, base_url = ?, enabled = ?, updated_at = ? WHERE id = ?').bind(name, baseUrl, enabled ? 1 : 0, new Date().toISOString(), source.id).run()
+  } catch { return jsonError(c, 'That trusted source URL already exists.', 409) }
+  return c.json({ source: { id: source.id, name, baseUrl, enabled } })
+})
+
+app.delete('/api/trusted-sources/:id', async (c) => {
+  const result = await c.env.DB.prepare('DELETE FROM trusted_sources WHERE id = ?').bind(c.req.param('id')).run()
+  return result.meta.changes ? c.body(null, 204) : jsonError(c, 'Trusted source not found.', 404)
+})
+
 app.post('/api/songs/:id/preview-slides', async (c) => {
   const song = await songById(c.env.DB, c.req.param('id'))
   if (!song) return jsonError(c, 'Song not found.', 404)
@@ -397,15 +554,30 @@ app.post('/api/songs/:id/format-text', async (c) => {
 app.post('/api/songs/:id/find-lyrics', async (c) => {
   const song = await songById(c.env.DB, c.req.param('id'))
   if (!song) return jsonError(c, 'Song not found.', 404)
-  // Do not scrape arbitrary content. A licensed Hymnary adapter can later populate this response.
-  const trustedSource = song.source_url?.startsWith('https://hymnary.org/') ? song.source_url : null
-  return c.json({ candidates: trustedSource ? [{ id: trustedSource, title: song.title, sourceName: 'hymnary.org', sourceUrl: trustedSource, available: false, message: 'Review and paste authorized text; automatic importing is not configured.' }] : [], message: 'Trusted lyric lookup is not configured in this deployment. Add licensed text or a provider adapter.' })
+  const sources = await trustedSources(c.env.DB)
+  const sourceUrl = song.source_url ?? ''
+  const source = sources.find((item) => normalizedHost(item.base_url) === normalizedHost(sourceUrl))
+  const candidates = source && isTrustedUrl(sourceUrl, sources)
+    ? [{ id: sourceUrl, title: song.title, sourceName: source.name, sourceUrl, available: true }]
+    : []
+  return c.json({ candidates, message: candidates.length ? 'Choose the source to import a reviewable lyric draft.' : 'Set this song’s source URL to a page from your trusted source list.' })
 })
 
 app.post('/api/songs/:id/use-lyric-candidate', async (c) => {
   const song = await songById(c.env.DB, c.req.param('id'))
   if (!song) return jsonError(c, 'Song not found.', 404)
-  return jsonError(c, 'Trusted lyric import is not configured. Review and paste authorized text instead.', 501)
+  const body = await readJson(c)
+  const sourceUrl = stringField(body?.sourceUrl ?? body?.candidateId, 'sourceUrl', { required: true, max: 2_000 })
+  if (!sourceUrl) return jsonError(c, 'A trusted source URL is required.')
+  try {
+    const rawText = await fetchTrustedText(sourceUrl, await trustedSources(c.env.DB))
+    const lyricsText = (await formatLyricsWithAi(c.env.AI, song.title, rawText)) ?? normalizeLyricsDraft(rawText)
+    const parsed = validateSectionedLyrics(lyricsText, song.title)
+    if (parsed.errors.length) return c.json({ error: 'The imported lyrics need review before formatting.', details: parsed.errors }, 422)
+    return c.json({ lyricsText, sourceUrl, lyricsSourceName: 'trusted import', slides: parsed.slides, requiresReview: true })
+  } catch (error) {
+    return jsonError(c, error instanceof Error ? error.message : 'Could not fetch that trusted lyric page.', 422)
+  }
 })
 
 app.get('/api/meetings', async (c) => {
@@ -550,6 +722,11 @@ app.get('/api/present/:viewToken', async (c) => {
   return c.json({ title: deck.title || 'Song night', meeting: deck, slides })
 })
 
-app.notFound(async (c) => c.env.ASSETS ? c.env.ASSETS.fetch(c.req.raw) : c.json({ error: 'Not found.' }, 404))
+app.notFound(async (c) => {
+  if (c.env.ASSETS && !new URL(c.req.url).pathname.startsWith('/api/')) {
+    return c.env.ASSETS.fetch(new Request(new URL('/index.html', c.req.url)))
+  }
+  return c.json({ error: 'Not found.' }, 404)
+})
 
 export default app
