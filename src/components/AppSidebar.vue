@@ -11,8 +11,8 @@ const emit = defineEmits<{ navigate: [page: Page]; logout: [] }>()
     <nav aria-label="Main navigation">
       <button :class="{ active: page === 'dashboard' }" @click="emit('navigate', 'dashboard')">Dashboard</button>
       <button :class="{ active: page === 'library' }" @click="emit('navigate', 'library')">Song library</button>
-      <button :class="{ active: page === 'meetings' }" @click="emit('navigate', 'meetings')">Plan meeting</button>
-      <button :class="{ active: page === 'history' }" @click="emit('navigate', 'history')">History</button>
+      <button :class="{ active: page === 'meetings' }" @click="emit('navigate', 'meetings')">Meetings</button>
+      <button :class="{ active: page === 'history' }" @click="emit('navigate', 'history')">Meeting History</button>
       <button :class="{ active: page === 'settings' }" @click="emit('navigate', 'settings')">Settings</button>
     </nav>
     <button class="logout" @click="emit('logout')">Sign out</button>

@@ -460,8 +460,8 @@ onBeforeUnmount(() => {
 
   <main v-else-if="!session?.authenticated" class="login-shell">
     <form class="login-card" @submit.prevent="login">
-      <p class="eyebrow">MEN’S GROUP</p><h1>Song management</h1>
-      <p class="muted">Plan the evening, keep the history, and present without distractions.</p>
+      <p class="eyebrow">SONG MANAGEMENT</p>
+      <h1>Login</h1>
       <label>Email <input v-model="email" type="email" autocomplete="email" required autofocus /></label>
       <label>Password <input v-model="password" type="password" autocomplete="current-password" required /></label>
       <p v-if="loginError" class="form-error">{{ loginError }}</p>
