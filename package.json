@@ -1,0 +1,29 @@
+{
+  "name": "song-management",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "check": "vue-tsc -b",
+    "deploy": "npm run build && wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply song-management --local",
+    "seed:history": "node scripts/import-wed-night-songs.mjs",
+    "db:seed:local": "npm run seed:history && wrangler d1 execute song-management --local --file data/wed-night-songs.seed.sql"
+  },
+  "dependencies": {
+    "@vitejs/plugin-vue": "^5.2.3",
+    "hono": "^4.7.2",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260811.1",
+    "typescript": "^5.7.3",
+    "tsx": "^4.19.3",
+    "vite": "^6.0.7",
+    "vue-tsc": "^2.2.0",
+    "wrangler": "^4.51.0"
+  }
+}

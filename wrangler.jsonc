@@ -1,0 +1,31 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "song-management",
+	"main": "src/worker.ts",
+	"compatibility_date": "2026-08-12",
+	"assets": {
+		"directory": "./dist",
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application",
+		"run_worker_first": [
+			"/api/*"
+		]
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "song-management",
+			"database_id": "REPLACE_WITH_D1_DATABASE_ID",
+			"migrations_dir": "migrations"
+		},
+		{
+			"binding": "song_management",
+			"database_name": "song-management",
+			"database_id": "7612a78d-d21e-46a1-883c-85d4361c1474",
+			"remote": true
+		}
+	],
+	"ai": {
+		"binding": "AI"
+	}
+}

@@ -1,0 +1,113 @@
+{
+  "sourceName": "wed-night-songs.txt",
+  "sourceSha256": "abb4edbb8674b426d26be6626c9dc247e998265116ed8fe05ffef61b7cb20341",
+  "summary": {
+    "meetings": 45,
+    "meetingSelections": 135,
+    "unusedSongs": 10,
+    "distinctCatalogSongs": 114,
+    "exactDuplicateOccurrences": 31,
+    "ambiguousGroups": 3
+  },
+  "ambiguities": [
+    {
+      "type": "same_hymn_number_different_title",
+      "hymnNumber": "371",
+      "occurrences": [
+        {
+          "hymnNumber": "371",
+          "title": "And Can it Be",
+          "normalizedTitle": "and can it be",
+          "sourceUrl": null,
+          "location": "line 23"
+        },
+        {
+          "hymnNumber": "371",
+          "title": "And Can It Be That I Should Gain",
+          "normalizedTitle": "and can it be that i should gain",
+          "sourceUrl": null,
+          "location": "line 88"
+        },
+        {
+          "hymnNumber": "371",
+          "title": "And Can it Be",
+          "normalizedTitle": "and can it be",
+          "sourceUrl": null,
+          "location": "line 118"
+        },
+        {
+          "hymnNumber": "371",
+          "title": "And Can It Be That I Should Gain",
+          "normalizedTitle": "and can it be that i should gain",
+          "sourceUrl": null,
+          "location": "line 204"
+        }
+      ]
+    },
+    {
+      "type": "same_hymn_number_different_title",
+      "hymnNumber": "353",
+      "occurrences": [
+        {
+          "hymnNumber": "353",
+          "title": "One Day When Heaven Was Filled With His Praises",
+          "normalizedTitle": "one day when heaven was filled with his praises",
+          "sourceUrl": null,
+          "location": "line 30"
+        },
+        {
+          "hymnNumber": "353",
+          "title": "One Day!",
+          "normalizedTitle": "one day",
+          "sourceUrl": null,
+          "location": "line 128"
+        }
+      ]
+    },
+    {
+      "type": "same_title_different_hymn_number",
+      "normalizedTitle": "my hope is built on nothing less",
+      "occurrences": [
+        {
+          "hymnNumber": "538",
+          "title": "My Hope is Built on Nothing Less",
+          "normalizedTitle": "my hope is built on nothing less",
+          "sourceUrl": null,
+          "location": "line 34"
+        },
+        {
+          "hymnNumber": "538",
+          "title": "My Hope is Built on Nothing Less",
+          "normalizedTitle": "my hope is built on nothing less",
+          "sourceUrl": null,
+          "location": "line 65"
+        },
+        {
+          "hymnNumber": "537",
+          "title": "My Hope is Built on Nothing Less",
+          "normalizedTitle": "my hope is built on nothing less",
+          "sourceUrl": null,
+          "location": "line 180"
+        }
+      ]
+    }
+  ],
+  "ignoredLines": [
+    {
+      "line": 243,
+      "value": "http://simp.ly/publish/P4zCk3",
+      "reason": "unrecognized non-song line"
+    },
+    {
+      "line": 245,
+      "value": "#RLCF",
+      "reason": "unrecognized non-song line"
+    }
+  ],
+  "rules": [
+    "Records merge only when hymn number and normalized title are both identical.",
+    "Case, punctuation, and curly-apostrophe differences normalize to aliases on the same record.",
+    "Different hymn numbers are never automatically merged, even when normalized titles match.",
+    "Different normalized titles are never automatically merged, even when hymn numbers match."
+  ]
+}

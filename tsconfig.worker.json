@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.worker.tsbuildinfo",
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "types": [],
+    "lib": ["ES2022", "WebWorker"],
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src/worker.ts", "src/worker-bindings.d.ts", "src/shared/**/*.ts"]
+}
