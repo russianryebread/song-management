@@ -22,6 +22,8 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 const encoder = new TextEncoder()
 const sessionCookie = 'song_session'
 const day = 86_400_000
+// Cloudflare Workers currently caps PBKDF2 at 100,000 iterations.
+const passwordIterations = 100_000
 
 function jsonError(c: any, message: string, status?: 400 | 401 | 404 | 409 | 422 | 501) {
   return c.json({ error: message }, status)
@@ -59,21 +61,22 @@ async function sha256(value: string): Promise<string> {
 }
 
 // PBKDF2 is available in Workers Web Crypto and keeps bootstrap authentication self-contained.
-async function passwordHash(password: string, salt = token()): Promise<string> {
+async function passwordHash(password: string, salt = token(), iterations = passwordIterations): Promise<string> {
   const baseKey = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits'])
   const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', hash: 'SHA-256', salt: encoder.encode(salt), iterations: 310_000 },
+    { name: 'PBKDF2', hash: 'SHA-256', salt: encoder.encode(salt), iterations },
     baseKey,
     256,
   )
   const encoded = btoa(String.fromCharCode(...new Uint8Array(bits)))
-  return `pbkdf2-sha256$310000$${salt}$${encoded}`
+  return `pbkdf2-sha256$${iterations}$${salt}$${encoded}`
 }
 
 async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const [algorithm, iterations, salt, expected] = stored.split('$')
-  if (algorithm !== 'pbkdf2-sha256' || iterations !== '310000' || !salt || !expected) return false
-  const actual = await passwordHash(password, salt)
+  const parsedIterations = Number(iterations)
+  if (algorithm !== 'pbkdf2-sha256' || !Number.isInteger(parsedIterations) || parsedIterations < 1 || parsedIterations > passwordIterations || !salt || !expected) return false
+  const actual = await passwordHash(password, salt, parsedIterations)
   return timingSafeEqual(actual, stored)
 }
 
