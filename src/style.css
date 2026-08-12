@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;900&family=Raleway:wght@400;600;900&family=Roboto:wght@400;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Raleway:wght@400;600;700&family=Roboto:wght@400;700&display=swap');
 
 :root {
     font-family:
@@ -17,6 +17,7 @@
     box-sizing: border-box;
 }
 body {
+    font-weight: 400;
     margin: 0;
     min-width: 320px;
     min-height: 100vh;
@@ -47,11 +48,15 @@ h1 {
     letter-spacing: -0.04em;
     font-size: clamp(2rem, 4vw, 3rem);
     margin-bottom: 0.4rem;
+    font-weight: 700;
 }
 h2 {
     font-size: 1.15rem;
+    font-weight: 700;
     margin: 0;
 }
+h3 { font-weight: 700; }
+strong { font-weight: 400; }
 small {
     color: #718096;
     display: block;
@@ -59,7 +64,7 @@ small {
 .eyebrow {
     color: #548275;
     font-size: 0.72rem;
-    font-weight: 750;
+    font-weight: 600;
     letter-spacing: 0.13em;
     margin-bottom: 0.5rem;
 }
@@ -72,7 +77,7 @@ small {
 .secondary-button,
 .text-button {
     border-radius: 0.55rem;
-    font-weight: 700;
+    font-weight: 400;
     transition: 0.16s ease;
 }
 .button {
@@ -131,7 +136,7 @@ small {
 label {
     display: grid;
     font-size: 0.86rem;
-    font-weight: 700;
+    font-weight: 400;
     gap: 0.4rem;
 }
 input,
@@ -191,6 +196,7 @@ textarea {
 }
 .brand strong {
     display: block;
+    font-weight: 700;
     letter-spacing: -0.025em;
 }
 .brand small {
@@ -206,7 +212,7 @@ textarea {
     border: 0;
     border-radius: 0.5rem;
     color: #c5d7ce;
-    font-weight: 650;
+    font-weight: 400;
     padding: 0.72rem 0.75rem;
     text-align: left;
 }
@@ -514,7 +520,7 @@ td strong {
 }
 .thumbnail strong {
     font-size: clamp(0.75rem, 1.2vw, 1rem);
-    font-weight: 600;
+    font-weight: 400;
     line-height: 1.45;
 }
 .meeting-list li {
@@ -539,7 +545,7 @@ td strong {
     border-radius: 999px;
     display: inline-flex;
     font-size: 0.7rem;
-    font-weight: 800;
+    font-weight: 600;
     justify-content: center;
     letter-spacing: 0.05em;
     line-height: 1;
@@ -570,7 +576,7 @@ td strong {
     margin: 0;
     padding: .45rem 2rem .45rem .7rem;
     font-size: .82rem;
-    font-weight: 700;
+    font-weight: 400;
 }
 .header-actions {
     display: flex;
@@ -591,7 +597,7 @@ td strong {
 .position {
     color: #77857c;
     font-size: 0.8rem;
-    font-weight: 800;
+    font-weight: 400;
 }
 .planned-list strong {
     display: block;
@@ -619,7 +625,7 @@ td strong {
 .presenter-link {
     display: inline-block;
     font-size: 0.85rem;
-    font-weight: 700;
+    font-weight: 400;
     margin-top: 0.85rem;
 }
 .add-song-list {
@@ -717,7 +723,7 @@ td strong {
 .presenter-heading {
     color: #b4c9bc;
     font-size: clamp(0.7rem, 1.3vw, 1.1rem);
-    font-weight: 700;
+    font-weight: 600;
     letter-spacing: 0.08em;
     opacity: 0.75;
     text-transform: uppercase;
@@ -733,7 +739,7 @@ td strong {
 .slide h1 {
     color: #fffefa;
     font-size: calc(clamp(2.4rem, 6.3vw, 7.0rem) * var(--text-scale));
-    font-weight: 600;
+    font-weight: 400;
     line-height: 1.25;
     margin: 0;
     max-width: 90rem;
@@ -748,7 +754,7 @@ td strong {
 .slide-section {
     color: #e9bd65;
     font-size: calc(clamp(0.8rem, 1.6vw, 1.3rem) * var(--text-scale));
-    font-weight: 750;
+    font-weight: 600;
     letter-spacing: 0.13em;
     margin-bottom: 2vh;
     text-transform: uppercase;
@@ -772,7 +778,7 @@ td strong {
     border-radius: 0.4rem;
     color: white;
     font-size: 0.95rem;
-    font-weight: 750;
+    font-weight: 400;
     height: 2.6rem;
     min-width: 3rem;
     padding: 0 0.55rem;
