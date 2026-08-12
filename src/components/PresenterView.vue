@@ -13,6 +13,7 @@ const loading = ref(false)
 const error = ref('')
 const meeting = ref<Meeting | null>(null)
 const textScale = ref(1)
+const presenterFont = ref<AppSettings['defaultPresenterFont']>('roboto')
 const repeatChorus = ref(false)
 const showSlideCount = ref(true)
 const cacheKey = computed(() => `song-management:deck:${token.value}`)
@@ -59,10 +60,13 @@ async function loadDeck() {
     const data = await api<{ meeting?: Meeting; deck?: Meeting; slides?: Slide[]; title?: string; settings?: AppSettings }>(`/api/present/${token.value}`)
     meeting.value = data.meeting ?? data.deck ?? null
     title.value = data.settings?.groupName || data.title || 'Song night'
-    if (data.settings && localStorage.getItem(settingsKey) === null) {
-      textScale.value = data.settings.defaultTextScale
-      repeatChorus.value = data.settings.defaultRepeatChorus
-      showSlideCount.value = data.settings.defaultShowSlideCount
+    if (data.settings) {
+      presenterFont.value = data.settings.defaultPresenterFont
+      if (localStorage.getItem(settingsKey) === null) {
+        textScale.value = data.settings.defaultTextScale
+        repeatChorus.value = data.settings.defaultRepeatChorus
+        showSlideCount.value = data.settings.defaultShowSlideCount
+      }
     }
     slides.value = meeting.value ? expandedSlides(meeting.value, data.slides) : data.slides ?? []
     if (!slides.value.length) throw new Error('This meeting does not have a slide deck yet.')
@@ -106,7 +110,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', keydown))
     <div v-else-if="error" class="presenter-status presenter-error"><p>{{ error }}</p><button class="button" @click.stop="loadDeck">Try again</button></div>
     <template v-else-if="activeSlide">
       <div class="presenter-heading">{{ title }}</div>
-      <section class="slide" :class="`slide-${activeSlide.kind}`" :style="{ '--text-scale': textScale }">
+      <section class="slide" :class="[`slide-${activeSlide.kind}`, `presenter-font-${presenterFont}`]" :style="{ '--text-scale': textScale }">
         <p v-if="activeSlide.section" class="slide-section">{{ activeSlide.section }}</p>
         <h1 v-for="line in activeSlide.lines" :key="line">{{ line }}</h1>
       </section>

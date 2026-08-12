@@ -28,6 +28,13 @@ function submitNewUser(event: Event) {
       <div><p class="eyebrow">GENERAL</p><h2>Default experience</h2></div>
       <label>Group name <input v-model="settings.groupName" maxlength="100" required /></label>
       <label>Default lyric size <input v-model.number="settings.defaultTextScale" type="range" min="0.75" max="1.35" step="0.05" /><small>{{ Math.round(settings.defaultTextScale * 100) }}%</small></label>
+      <label>Projector font
+        <select v-model="settings.defaultPresenterFont">
+          <option value="roboto">Roboto</option>
+          <option value="inter">Inter</option>
+          <option value="raleway">Raleway</option>
+        </select>
+      </label>
       <label class="toggle-row"><input v-model="settings.defaultRepeatChorus" type="checkbox" /> Repeat each song’s chorus after every verse</label>
       <label class="toggle-row"><input v-model="settings.defaultShowSlideCount" type="checkbox" /> Show slide count in the presenter</label>
       <button class="button" :disabled="busy">Save settings</button>

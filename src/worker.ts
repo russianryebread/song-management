@@ -16,7 +16,8 @@ type App = Hono<{ Bindings: Bindings; Variables: Variables }>
 type JsonRecord = Record<string, unknown>
 type AiBinding = { run(model: string, inputs: Record<string, unknown>): Promise<unknown> }
 type TrustedSource = { id: string; name: string; base_url: string; enabled: number }
-type AppSettings = { group_name: string; default_text_scale: number; default_repeat_chorus: number; default_show_slide_count: number }
+type PresenterFont = 'roboto' | 'inter' | 'raleway'
+type AppSettings = { group_name: string; default_text_scale: number; default_presenter_font: PresenterFont; default_repeat_chorus: number; default_show_slide_count: number }
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 const encoder = new TextEncoder()
@@ -126,14 +127,15 @@ function serializeSettings(row: AppSettings) {
   return {
     groupName: row.group_name,
     defaultTextScale: Number(row.default_text_scale),
+    defaultPresenterFont: row.default_presenter_font,
     defaultRepeatChorus: Boolean(row.default_repeat_chorus),
     defaultShowSlideCount: Boolean(row.default_show_slide_count),
   }
 }
 
 async function appSettings(db: D1Database): Promise<AppSettings> {
-  const found = await db.prepare('SELECT group_name, default_text_scale, default_repeat_chorus, default_show_slide_count FROM app_settings WHERE id = 1').first<AppSettings>()
-  return found ?? { group_name: 'Men’s group', default_text_scale: 1, default_repeat_chorus: 0, default_show_slide_count: 1 }
+  const found = await db.prepare('SELECT group_name, default_text_scale, default_presenter_font, default_repeat_chorus, default_show_slide_count FROM app_settings WHERE id = 1').first<AppSettings>()
+  return found ?? { group_name: 'Men’s group', default_text_scale: 1, default_presenter_font: 'roboto', default_repeat_chorus: 0, default_show_slide_count: 1 }
 }
 
 function parseLines(value: unknown): string[] | null {
@@ -378,15 +380,16 @@ app.patch('/api/settings', requireAuth, async (c) => {
   const current = await appSettings(c.env.DB)
   const groupName = body?.groupName === undefined ? current.group_name : stringField(body.groupName, 'groupName', { required: true, max: 100 })
   const defaultTextScale = body?.defaultTextScale === undefined ? Number(current.default_text_scale) : body.defaultTextScale
+  const defaultPresenterFont = body?.defaultPresenterFont === undefined ? current.default_presenter_font : String(body.defaultPresenterFont)
   const defaultRepeatChorus = body?.defaultRepeatChorus === undefined ? Boolean(current.default_repeat_chorus) : body.defaultRepeatChorus
   const defaultShowSlideCount = body?.defaultShowSlideCount === undefined ? Boolean(current.default_show_slide_count) : body.defaultShowSlideCount
-  if (!groupName || typeof defaultTextScale !== 'number' || !Number.isFinite(defaultTextScale) || defaultTextScale < .75 || defaultTextScale > 1.35 || typeof defaultRepeatChorus !== 'boolean' || typeof defaultShowSlideCount !== 'boolean') return jsonError(c, 'The settings are invalid.')
-  const updated: AppSettings = { group_name: groupName, default_text_scale: defaultTextScale, default_repeat_chorus: defaultRepeatChorus ? 1 : 0, default_show_slide_count: defaultShowSlideCount ? 1 : 0 }
+  if (!groupName || typeof defaultTextScale !== 'number' || !Number.isFinite(defaultTextScale) || defaultTextScale < .75 || defaultTextScale > 1.35 || !['roboto', 'inter', 'raleway'].includes(defaultPresenterFont) || typeof defaultRepeatChorus !== 'boolean' || typeof defaultShowSlideCount !== 'boolean') return jsonError(c, 'The settings are invalid.')
+  const updated: AppSettings = { group_name: groupName, default_text_scale: defaultTextScale, default_presenter_font: defaultPresenterFont as PresenterFont, default_repeat_chorus: defaultRepeatChorus ? 1 : 0, default_show_slide_count: defaultShowSlideCount ? 1 : 0 }
   await c.env.DB.prepare(
-    `INSERT INTO app_settings (id, group_name, default_text_scale, default_repeat_chorus, default_show_slide_count, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET group_name = excluded.group_name, default_text_scale = excluded.default_text_scale, default_repeat_chorus = excluded.default_repeat_chorus, default_show_slide_count = excluded.default_show_slide_count, updated_at = excluded.updated_at`,
-  ).bind(updated.group_name, updated.default_text_scale, updated.default_repeat_chorus, updated.default_show_slide_count, new Date().toISOString()).run()
+    `INSERT INTO app_settings (id, group_name, default_text_scale, default_presenter_font, default_repeat_chorus, default_show_slide_count, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET group_name = excluded.group_name, default_text_scale = excluded.default_text_scale, default_presenter_font = excluded.default_presenter_font, default_repeat_chorus = excluded.default_repeat_chorus, default_show_slide_count = excluded.default_show_slide_count, updated_at = excluded.updated_at`,
+  ).bind(updated.group_name, updated.default_text_scale, updated.default_presenter_font, updated.default_repeat_chorus, updated.default_show_slide_count, new Date().toISOString()).run()
   return c.json({ settings: serializeSettings(updated) })
 })
 

@@ -70,6 +70,7 @@ export type TrustedSource = {
 export type AppSettings = {
   groupName: string
   defaultTextScale: number
+  defaultPresenterFont: 'roboto' | 'inter' | 'raleway'
   defaultRepeatChorus: boolean
   defaultShowSlideCount: boolean
 }

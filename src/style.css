@@ -1,5 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;900&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;900&family=Raleway:wght@400;600;900&family=Roboto:wght@400;600&display=swap');
 
 :root {
     font-family:
@@ -732,7 +731,6 @@ td strong {
     text-align: center;
 }
 .slide h1 {
-    font-family: "Roboto";
     color: #fffefa;
     font-size: calc(clamp(2.4rem, 6.3vw, 7.0rem) * var(--text-scale));
     font-weight: 600;
@@ -740,6 +738,9 @@ td strong {
     margin: 0;
     max-width: 90rem;
 }
+.presenter-font-roboto h1 { font-family: Roboto, sans-serif; }
+.presenter-font-inter h1 { font-family: Inter, sans-serif; }
+.presenter-font-raleway h1 { font-family: Raleway, sans-serif; }
 .slide-title h1 {
     color: #f1c66e;
     font-size: calc(clamp(3.5rem, 8vw, 9.5rem) * var(--text-scale));
