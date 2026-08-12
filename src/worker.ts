@@ -317,14 +317,28 @@ async function assembleDeck(db: D1Database, meeting: any) {
 
 app.post('/api/login', async (c) => {
   const body = await readJson(c)
+  const email = stringField(body?.email, 'email', { required: true, max: 320 })?.toLowerCase()
   const password = stringField(body?.password, 'password', { required: true, max: 1_000 })
-  if (!password) return jsonError(c, 'A password is required.')
+  if (!email || !/^\S+@\S+\.\S+$/.test(email) || !password) return jsonError(c, 'An email and password are required.')
 
-  let user = await c.env.DB.prepare('SELECT id, email, password_hash FROM users LIMIT 1').first<any>()
+  let user = await c.env.DB.prepare('SELECT id, email, password_hash FROM users WHERE email = ?').bind(email).first<any>()
   if (!user) {
-    if (!c.env.ADMIN_PASSWORD || !timingSafeEqual(password, c.env.ADMIN_PASSWORD)) return jsonError(c, 'Invalid email or password.', 401)
-    user = { id: id(), email: c.env.ADMIN_EMAIL || 'admin@local', password_hash: await passwordHash(password) }
-    await c.env.DB.prepare('INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)').bind(user.id, user.email, user.password_hash, new Date().toISOString()).run()
+    const existingAdministrator = await c.env.DB.prepare('SELECT id FROM users LIMIT 1').first<{ id: string }>()
+    const legacyUser = existingAdministrator
+      ? await c.env.DB.prepare('SELECT id, email, password_hash FROM users LIMIT 1').first<any>()
+      : null
+    // Early local builds created a placeholder `admin@local` account before the
+    // email login screen existed. Let its owner set a real email once, after the
+    // existing password is verified.
+    if (legacyUser?.email === 'admin@local' && await verifyPassword(password, legacyUser.password_hash)) {
+      await c.env.DB.prepare('UPDATE users SET email = ? WHERE id = ?').bind(email, legacyUser.id).run()
+      user = { ...legacyUser, email }
+    } else if (existingAdministrator) return jsonError(c, 'Invalid email or password.', 401)
+    else {
+      if (!c.env.ADMIN_PASSWORD || !timingSafeEqual(password, c.env.ADMIN_PASSWORD)) return jsonError(c, 'Invalid email or password.', 401)
+      user = { id: id(), email, password_hash: await passwordHash(password) }
+      await c.env.DB.prepare('INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)').bind(user.id, user.email, user.password_hash, new Date().toISOString()).run()
+    }
   } else if (!(await verifyPassword(password, user.password_hash))) {
     return jsonError(c, 'Invalid email or password.', 401)
   }
@@ -585,10 +599,11 @@ app.post('/api/songs/:id/use-lyric-candidate', async (c) => {
 
 app.get('/api/meetings', async (c) => {
   const rows = await c.env.DB.prepare(
-    `SELECT m.*, COUNT(ms.id) AS song_count FROM meetings m LEFT JOIN meeting_songs ms ON ms.meeting_id = m.id
+    `SELECT m.*, COUNT(ms.id) AS song_count, GROUP_CONCAT(s.title, ' · ') AS song_titles
+     FROM meetings m LEFT JOIN meeting_songs ms ON ms.meeting_id = m.id LEFT JOIN songs s ON s.id = ms.song_id
      GROUP BY m.id ORDER BY m.meeting_date DESC`,
   ).all<any>()
-  return c.json({ meetings: rows.results.map((m: any) => ({ id: m.id, date: m.meeting_date, meetingDate: m.meeting_date, meeting_date: m.meeting_date, title: m.title, status: m.status, notes: m.notes, songCount: Number(m.song_count), viewToken: m.view_token ?? null, view_token: m.view_token ?? null })) })
+  return c.json({ meetings: rows.results.map((m: any) => ({ id: m.id, date: m.meeting_date, meetingDate: m.meeting_date, meeting_date: m.meeting_date, title: m.title, status: m.status, notes: m.notes, songCount: Number(m.song_count), songTitles: m.song_titles ?? '', viewToken: m.view_token ?? null, view_token: m.view_token ?? null })) })
 })
 
 app.post('/api/meetings', async (c) => {

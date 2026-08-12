@@ -40,6 +40,8 @@ export type Meeting = {
   title?: string | null
   notes?: string | null
   status: 'draft' | 'published' | 'past'
+  songCount?: number
+  songTitles?: string
   viewToken?: string | null
   view_token?: string | null
   songs?: MeetingSong[]

@@ -19,6 +19,7 @@ const router = useRouter()
 const isPresenter = computed(() => route.name === 'presenter')
 const loading = ref(true)
 const session = ref<Session | null>(null)
+const email = ref('')
 const password = ref('')
 const loginError = ref('')
 const page = ref<Page>('dashboard')
@@ -45,6 +46,8 @@ const emptySong = (): Song => ({ id: '', title: '', hymnNumber: '', sourceUrl: '
 const apiSongs = computed(() => songs.value)
 const upcomingMeeting = computed(() => meetings.value.find((meeting) => meeting.status === 'draft') ?? null)
 const recentMeetings = computed(() => [...meetings.value].sort((a, b) => meetingDate(b).localeCompare(meetingDate(a))).slice(0, 6))
+const planningMeetings = computed(() => meetings.value.filter((meeting) => meeting.status === 'draft' || meeting.status === 'published'))
+const pastMeetings = computed(() => meetings.value.filter((meeting) => meeting.status === 'past'))
 const shownSongs = computed(() => {
   const query = songSearch.value.trim().toLocaleLowerCase()
   return apiSongs.value.filter((song) => {
@@ -156,7 +159,8 @@ async function login() {
   loginError.value = ''
   isBusy.value = true
   try {
-    await api('/api/login', { method: 'POST', body: JSON.stringify({ password: password.value }) })
+    await api('/api/login', { method: 'POST', body: JSON.stringify({ email: email.value, password: password.value }) })
+    email.value = ''
     password.value = ''
     session.value = { authenticated: true }
     await loadAppData()
@@ -404,6 +408,19 @@ async function publishMeeting() {
   } catch (caught) { error.value = (caught as Error).message } finally { isBusy.value = false }
 }
 
+async function updateMeetingStatus(status: Meeting['status']) {
+  const meeting = activeMeeting.value
+  if (!meeting) return
+  isBusy.value = true
+  try {
+    const result = await api<Meeting | { meeting: Meeting }>(`/api/meetings/${meeting.id}`, { method: 'PATCH', body: JSON.stringify({ status }) })
+    const updated = (result as { meeting?: Meeting }).meeting ?? result as Meeting
+    activeMeeting.value = { ...meeting, ...updated, songs: updated.songs ?? meeting.songs }
+    meetings.value = meetings.value.map((item) => item.id === meeting.id ? { ...item, ...updated } : item)
+    notice.value = `Meeting marked ${status}.`
+  } catch (caught) { error.value = (caught as Error).message } finally { isBusy.value = false }
+}
+
 async function saveMeetingSlide(slide: Slide, rawLines: string) {
   if (!slide.id) return
   const lines = rawLines.split('\n').map((line) => line.trim()).filter(Boolean)
@@ -445,7 +462,8 @@ onBeforeUnmount(() => {
     <form class="login-card" @submit.prevent="login">
       <p class="eyebrow">MEN’S GROUP</p><h1>Song management</h1>
       <p class="muted">Plan the evening, keep the history, and present without distractions.</p>
-      <label>Password <input v-model="password" type="password" autocomplete="current-password" required autofocus /></label>
+      <label>Email <input v-model="email" type="email" autocomplete="email" required autofocus /></label>
+      <label>Password <input v-model="password" type="password" autocomplete="current-password" required /></label>
       <p v-if="loginError" class="form-error">{{ loginError }}</p>
       <button class="button" :disabled="isBusy">{{ isBusy ? 'Signing in…' : 'Sign in' }}</button>
     </form>
@@ -463,9 +481,9 @@ onBeforeUnmount(() => {
           <section class="card">
             <div class="card-heading"><div><p class="eyebrow">UP NEXT</p><h2>{{ upcomingMeeting ? displayDate(meetingDate(upcomingMeeting)) : 'No meeting planned' }}</h2></div><button v-if="upcomingMeeting" class="text-button" @click="openMeeting(upcomingMeeting)">Open</button></div>
             <p v-if="!upcomingMeeting" class="muted">Start with a date, then choose songs from your library.</p>
-            <ol v-else class="song-list"><li v-for="song in upcomingMeeting.songs ?? []" :key="song.id"><span>{{ song.title }}</span><small>{{ songNumber(song) }}</small></li><li v-if="!(upcomingMeeting.songs ?? []).length" class="muted">No songs selected yet.</li></ol>
+            <ol v-else class="song-list"><li v-for="song in upcomingMeeting.songs ?? []" :key="song.id"><span>{{ song.title }}</span><small>{{ songNumber(song) }}</small></li><li v-if="!(upcomingMeeting.songs ?? []).length && upcomingMeeting.songTitles" class="muted">{{ upcomingMeeting.songTitles }}</li><li v-else-if="!(upcomingMeeting.songs ?? []).length" class="muted">No songs selected yet.</li></ol>
           </section>
-          <section class="card"><div class="card-heading"><div><p class="eyebrow">RECENT</p><h2>Meeting history</h2></div><button class="text-button" @click="selectPage('history')">See all</button></div><ul class="history-list"><li v-for="meeting in recentMeetings" :key="meeting.id"><button @click="openMeeting(meeting)"><strong>{{ displayDate(meetingDate(meeting)) }}</strong><span>{{ meeting.songs?.length ?? 0 }} songs</span></button></li></ul></section>
+          <section class="card"><div class="card-heading"><div><p class="eyebrow">RECENT</p><h2>Meeting history</h2></div><button class="text-button" @click="selectPage('history')">See all</button></div><ul class="history-list"><li v-for="meeting in recentMeetings" :key="meeting.id"><button @click="openMeeting(meeting)"><strong>{{ displayDate(meetingDate(meeting)) }}</strong><span>{{ meeting.songCount ?? meeting.songs?.length ?? 0 }} songs</span></button></li></ul></section>
         </div>
       </template>
 
@@ -488,9 +506,9 @@ onBeforeUnmount(() => {
       </template>
 
       <template v-else-if="page === 'meetings'">
-        <header class="page-header"><div><p class="eyebrow">PLANNING</p><h1>{{ activeMeeting ? displayDate(meetingDate(activeMeeting)) : 'Plan a meeting' }}</h1></div><button v-if="!activeMeeting" class="button" @click="createMeeting">+ New meeting</button><button v-else class="text-button" @click="navigate('/meetings')">All meetings</button></header>
-        <section v-if="!activeMeeting" class="card"><ul class="meeting-list"><li v-for="meeting in meetings" :key="meeting.id"><button @click="openMeeting(meeting)"><span><strong>{{ displayDate(meetingDate(meeting)) }}</strong><small>{{ meeting.title || 'Men’s group' }}</small></span><span class="meeting-state" :class="meeting.status">{{ meeting.status }}</span></button></li></ul></section>
-        <div v-else class="meeting-grid"><section class="card"><div class="card-heading"><div><p class="eyebrow">SELECTED SONGS</p><h2>{{ activeMeeting.songs?.length ?? 0 }} songs</h2></div><span class="meeting-state" :class="activeMeeting.status">{{ activeMeeting.status }}</span></div><ol class="planned-list"><li v-for="(song, index) in activeMeeting.songs ?? []" :key="song.meetingSongId ?? song.meeting_song_id"><span class="position">{{ index + 1 }}</span><div><strong>{{ song.title }}</strong><small>{{ songUses(song) ? `Used ${songUses(song)}× · last ${displayDate(songLastUsed(song))}` : 'Never used' }}</small></div><div class="row-actions"><button :disabled="index === 0" @click="moveMeetingSong(index, -1)">↑</button><button :disabled="index === (activeMeeting.songs?.length ?? 0) - 1" @click="moveMeetingSong(index, 1)">↓</button><button aria-label="Remove song" @click="removeMeetingSong(song)">×</button></div></li><li v-if="!(activeMeeting.songs ?? []).length" class="muted">Add songs from the library on the right.</li></ol><div class="meeting-actions"><button class="secondary-button" :disabled="isBusy || !(activeMeeting.songs?.length)" @click="generateSlides">Generate deck</button><button class="secondary-button" :disabled="!(activeMeeting.songs?.length)" @click="editingMeetingSlides = !editingMeetingSlides">{{ editingMeetingSlides ? 'Close slide editor' : 'Edit slides' }}</button><button class="button" :disabled="isBusy || !(activeMeeting.songs?.length)" @click="publishMeeting">Publish presenter</button></div><a v-if="meetingToken(activeMeeting)" class="presenter-link" :href="`/present/${meetingToken(activeMeeting)}`" target="_blank" rel="noreferrer">Open ready-to-present deck ↗</a></section><section class="card"><p class="eyebrow">ADD SONGS</p><label class="sr-only" for="meeting-search">Search songs</label><input id="meeting-search" v-model="meetingSearch" placeholder="Search song library" /><ul class="add-song-list"><li v-for="song in meetingSongChoices" :key="song.id"><div><strong>{{ song.title }}</strong><small>{{ songUses(song) ? `${songUses(song)}× used · ${displayDate(songLastUsed(song))}` : 'Never used' }}</small></div><button class="text-button" :disabled="activeMeeting.songs?.some((item) => item.id === song.id)" @click="addSongToMeeting(song)">Add</button></li></ul></section></div>
+        <header class="page-header"><div><p class="eyebrow">PLANNING</p><h1>{{ activeMeeting ? displayDate(meetingDate(activeMeeting)) : 'Plan a meeting' }}</h1></div><button v-if="!activeMeeting" class="button" @click="createMeeting">+ New meeting</button><div v-else class="header-actions"><button class="secondary-button" @click="createMeeting">+ New meeting</button><button class="text-button" @click="navigate('/meetings')">All meetings</button></div></header>
+        <section v-if="!activeMeeting" class="card"><ul class="meeting-list"><li v-for="meeting in planningMeetings" :key="meeting.id"><button @click="openMeeting(meeting)"><span><strong>{{ displayDate(meetingDate(meeting)) }}</strong><small>{{ meeting.songTitles || meeting.title || settings.groupName }}</small></span><span class="meeting-state" :class="meeting.status">{{ meeting.status }}</span></button></li><li v-if="!planningMeetings.length" class="muted">No draft or published meetings.</li></ul></section>
+        <div v-else class="meeting-grid"><section class="card"><div class="card-heading"><div><p class="eyebrow">SELECTED SONGS</p><h2>{{ activeMeeting.songs?.length ?? 0 }} songs</h2></div><select class="meeting-status-select" :value="activeMeeting.status" :disabled="isBusy" aria-label="Meeting status" @change="updateMeetingStatus(($event.target as HTMLSelectElement).value as Meeting['status'])"><option value="draft">Draft</option><option value="published">Published</option><option value="past">Past / archive</option></select></div><ol class="planned-list"><li v-for="(song, index) in activeMeeting.songs ?? []" :key="song.meetingSongId ?? song.meeting_song_id"><span class="position">{{ index + 1 }}</span><div><strong>{{ song.title }}</strong><small>{{ songUses(song) ? `Used ${songUses(song)}× · last ${displayDate(songLastUsed(song))}` : 'Never used' }}</small></div><div class="row-actions"><button :disabled="index === 0" @click="moveMeetingSong(index, -1)">↑</button><button :disabled="index === (activeMeeting.songs?.length ?? 0) - 1" @click="moveMeetingSong(index, 1)">↓</button><button aria-label="Remove song" @click="removeMeetingSong(song)">×</button></div></li><li v-if="!(activeMeeting.songs ?? []).length" class="muted">Add songs from the library on the right.</li></ol><div class="meeting-actions"><button class="secondary-button" :disabled="isBusy || !(activeMeeting.songs?.length)" @click="generateSlides">Generate deck</button><button class="secondary-button" :disabled="!(activeMeeting.songs?.length)" @click="editingMeetingSlides = !editingMeetingSlides">{{ editingMeetingSlides ? 'Close slide editor' : 'Edit slides' }}</button><button class="button" :disabled="isBusy || !(activeMeeting.songs?.length)" @click="publishMeeting">Publish presenter</button></div><a v-if="meetingToken(activeMeeting)" class="presenter-link" :href="`/present/${meetingToken(activeMeeting)}`" target="_blank" rel="noreferrer">Open ready-to-present deck ↗</a></section><section class="card"><p class="eyebrow">ADD SONGS</p><label class="sr-only" for="meeting-search">Search songs</label><input id="meeting-search" v-model="meetingSearch" placeholder="Search song library" /><ul class="add-song-list"><li v-for="song in meetingSongChoices" :key="song.id"><div><strong>{{ song.title }}</strong><small>{{ songUses(song) ? `${songUses(song)}× used · ${displayDate(songLastUsed(song))}` : 'Never used' }}</small></div><button class="text-button" :disabled="activeMeeting.songs?.some((item) => item.id === song.id)" @click="addSongToMeeting(song)">Add</button></li></ul></section></div>
         <section v-if="activeMeeting && editingMeetingSlides" class="card meeting-slide-editor">
           <div class="card-heading"><div><p class="eyebrow">MEETING-SPECIFIC DECK</p><h2>Edit the saved projector slides</h2></div></div>
           <template v-for="song in activeMeeting.songs ?? []" :key="song.meetingSongId ?? song.meeting_song_id">
@@ -505,7 +523,7 @@ onBeforeUnmount(() => {
 
       <template v-else-if="page === 'history'">
         <header class="page-header"><div><p class="eyebrow">HISTORY</p><h1>Past meetings</h1><p class="muted">Every song’s previous use is counted from these meeting records.</p></div></header>
-        <section class="card"><ul class="meeting-list"><li v-for="meeting in recentMeetings" :key="meeting.id"><button @click="openMeeting(meeting)"><span><strong>{{ displayDate(meetingDate(meeting)) }}</strong><small>{{ (meeting.songs ?? []).map((song) => song.title).join(' · ') || 'No songs recorded' }}</small></span><span class="meeting-state" :class="meeting.status">{{ meeting.status }}</span></button></li></ul></section>
+        <section class="card"><ul class="meeting-list"><li v-for="meeting in pastMeetings" :key="meeting.id"><button @click="openMeeting(meeting)"><span><strong>{{ displayDate(meetingDate(meeting)) }}</strong><small>{{ meeting.songTitles || 'No songs recorded' }}</small></span><span class="meeting-state" :class="meeting.status">{{ meeting.status }}</span></button></li><li v-if="!pastMeetings.length" class="muted">No archived meetings.</li></ul></section>
       </template>
 
       <SettingsView v-else :settings="settings" :users="users" :current-user-id="session?.user?.id" :busy="isBusy" @save="saveSettings" @add-user="addUser" @remove-user="removeUser" />
