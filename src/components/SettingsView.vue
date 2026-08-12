@@ -30,7 +30,7 @@ function submitNewUser(event: Event) {
       <label>Default lyric size <input v-model.number="settings.defaultTextScale" type="range" min="0.75" max="1.35" step="0.05" /><small>{{ Math.round(settings.defaultTextScale * 100) }}%</small></label>
       <label>Projector font
         <select v-model="settings.defaultPresenterFont">
-          <option value="roboto">Roboto</option>
+          <option value="libre-baskerville">Libre Baskerville</option>
           <option value="inter">Inter</option>
           <option value="raleway">Raleway</option>
         </select>

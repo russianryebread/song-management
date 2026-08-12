@@ -38,7 +38,7 @@ const editingMeetingSlides = ref(false)
 const isBusy = ref(false)
 const trustedSources = ref<TrustedSource[]>([])
 const newTrustedSource = ref({ name: '', baseUrl: '' })
-const settings = ref<AppSettings>({ groupName: 'Men’s group', defaultTextScale: 1, defaultPresenterFont: 'roboto', defaultRepeatChorus: false, defaultShowSlideCount: true })
+const settings = ref<AppSettings>({ groupName: 'Men’s group', defaultTextScale: 1, defaultPresenterFont: 'libre-baskerville', defaultRepeatChorus: false, defaultShowSlideCount: true })
 const users = ref<UserAccount[]>([])
 let toastTimer: number | undefined
 
