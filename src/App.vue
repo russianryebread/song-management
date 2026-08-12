@@ -1,15 +1,22 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   api, getCollection, meetingDate, meetingToken, songLastUsed, songLyrics, songNumber, songUses,
   type AppSettings, type LyricCandidate, type Meeting, type MeetingSong, type Slide, type Song, type TrustedSource, type UserAccount,
 } from './api'
-import { flattenDeck, parseLyrics } from './lyrics'
+import { parseLyrics } from './lyrics'
+import AppSidebar from './components/AppSidebar.vue'
+import PresenterView from './components/PresenterView.vue'
+import SettingsView from './components/SettingsView.vue'
+import ToastStack from './components/ToastStack.vue'
 
 type Page = 'dashboard' | 'library' | 'meetings' | 'history' | 'settings'
 type Session = { authenticated?: boolean; email?: string; user?: { id: string; email: string } }
 
-const presenterToken = location.pathname.match(/^\/present\/([^/]+)/)?.[1]
+const route = useRoute()
+const router = useRouter()
+const isPresenter = computed(() => route.name === 'presenter')
 const loading = ref(true)
 const session = ref<Session | null>(null)
 const password = ref('')
@@ -32,7 +39,6 @@ const trustedSources = ref<TrustedSource[]>([])
 const newTrustedSource = ref({ name: '', baseUrl: '' })
 const settings = ref<AppSettings>({ groupName: 'Men’s group', defaultTextScale: 1, defaultRepeatChorus: false, defaultShowSlideCount: true })
 const users = ref<UserAccount[]>([])
-const newUser = ref({ email: '', password: '' })
 let toastTimer: number | undefined
 
 const emptySong = (): Song => ({ id: '', title: '', hymnNumber: '', sourceUrl: '', lyricsText: '' })
@@ -66,38 +72,25 @@ function displayDate(value?: string | null) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(`${value}T12:00:00`))
 }
 
-function routePath(value = location.pathname): string {
-  return value.replace(/\/+$/, '') || '/'
-}
-
-function setPath(path: string, { replace = false } = {}) {
-  const nextPath = routePath(path)
-  if (routePath() !== nextPath) window.history[replace ? 'replaceState' : 'pushState']({}, '', nextPath)
-}
-
-function navigate(path: string, { replace = false } = {}) {
-  setPath(path, { replace })
-  void applyRoute()
-}
+function setPath(path: string, { replace = false } = {}) { void (replace ? router.replace(path) : router.push(path)) }
+function navigate(path: string, options: { replace?: boolean } = {}) { setPath(path, options) }
 
 async function applyRoute() {
-  if (presenterToken || !session.value?.authenticated) return
-  const path = routePath()
-  const songMatch = path.match(/^\/library\/([^/]+)$/)
-  const meetingMatch = path.match(/^\/(?:meetings|history)\/([^/]+)$/)
+  if (isPresenter.value || !session.value?.authenticated) return
+  const routeName = String(route.name ?? 'dashboard')
   lyricCandidates.value = []
   editingMeetingSlides.value = false
 
-  if (path === '/library') {
+  if (routeName === 'library') {
     page.value = 'library'; activeMeeting.value = null; editingSong.value = null; return
   }
-  if (path === '/library/new') {
+  if (routeName === 'song-new') {
     page.value = 'library'; activeMeeting.value = null; editSong(undefined, false); return
   }
-  if (songMatch) {
+  if (routeName === 'song-edit') {
     page.value = 'library'; activeMeeting.value = null
     try {
-      const result = await api<Song | { song: Song }>(`/api/songs/${songMatch[1]}`)
+      const result = await api<Song | { song: Song }>(`/api/songs/${String(route.params.songId)}`)
       editSong(payload(result), false)
     } catch (caught) {
       error.value = (caught as Error).message
@@ -105,26 +98,27 @@ async function applyRoute() {
     }
     return
   }
-  if (path === '/meetings') {
+  if (routeName === 'meetings') {
     page.value = 'meetings'; activeMeeting.value = null; editingSong.value = null; return
   }
-  if (meetingMatch) {
+  if (routeName === 'meeting-edit') {
     page.value = 'meetings'
     editingSong.value = null
-    const known = meetings.value.find((meeting) => meeting.id === meetingMatch[1])
-    const routePage = meetingMatch[0].startsWith('/history/') ? 'history' : 'meetings'
+    const meetingId = String(route.params.meetingId)
+    const known = meetings.value.find((meeting) => meeting.id === meetingId)
+    const routePage = 'meetings'
     if (known) {
-      if (!(await openMeeting(known, false, routePage))) navigate(routePage === 'history' ? '/history' : '/meetings', { replace: true })
+      if (!(await openMeeting(known, false, routePage))) navigate('/meetings', { replace: true })
     }
     else {
-      if (!(await openMeeting({ id: meetingMatch[1], status: 'draft' }, false, routePage))) navigate(routePage === 'history' ? '/history' : '/meetings', { replace: true })
+      if (!(await openMeeting({ id: meetingId, status: 'draft' }, false, routePage))) navigate('/meetings', { replace: true })
     }
     return
   }
-  page.value = path === '/history' ? 'history' : path === '/settings' ? 'settings' : 'dashboard'
+  page.value = routeName === 'history' ? 'history' : routeName === 'settings' ? 'settings' : 'dashboard'
   activeMeeting.value = null
   editingSong.value = null
-  if (path !== '/' && path !== '/history' && path !== '/settings') navigate(page.value === 'history' ? '/history' : page.value === 'settings' ? '/settings' : '/', { replace: true })
+  if (!['dashboard', 'history', 'settings'].includes(routeName)) navigate(page.value === 'history' ? '/history' : page.value === 'settings' ? '/settings' : '/', { replace: true })
 }
 
 async function loadAppData() {
@@ -143,7 +137,7 @@ async function loadAppData() {
 }
 
 async function initialize() {
-  if (presenterToken) return
+  if (isPresenter.value) return
   try {
     session.value = await api<Session>('/api/session')
     if (session.value?.authenticated || session.value?.user) {
@@ -306,13 +300,12 @@ async function saveSettings() {
   } catch (caught) { error.value = (caught as Error).message } finally { isBusy.value = false }
 }
 
-async function addUser() {
-  if (!newUser.value.email.trim() || !newUser.value.password) return
+async function addUser(value: { email: string; password: string }) {
+  if (!value.email.trim() || !value.password) return
   isBusy.value = true
   try {
-    const result = await api<{ user: UserAccount }>('/api/users', { method: 'POST', body: JSON.stringify(newUser.value) })
+    const result = await api<{ user: UserAccount }>('/api/users', { method: 'POST', body: JSON.stringify(value) })
     users.value.push(result.user)
-    newUser.value = { email: '', password: '' }
     notice.value = 'Administrator added.'
   } catch (caught) { error.value = (caught as Error).message } finally { isBusy.value = false }
 }
@@ -427,155 +420,24 @@ async function saveMeetingSlide(slide: Slide, rawLines: string) {
   } catch (caught) { error.value = (caught as Error).message }
 }
 
-const deckSlides = ref<Slide[]>([])
-const deckTitle = ref('')
-const deckIndex = ref(0)
-const deckReady = ref(false)
-const deckError = ref('')
-const deckLoading = ref(false)
-const deckCacheKey = `song-management:deck:${presenterToken ?? ''}`
-const presenterSettingsKey = 'song-management:presenter-settings'
-const deckMeeting = ref<Meeting | null>(null)
-const textScale = ref(1)
-const repeatChorus = ref(false)
-const showSlideCount = ref(true)
-const activeSlide = computed(() => deckSlides.value[deckIndex.value])
-
-function cloneSlide(slide: Slide): Slide {
-  return { ...slide, lines: [...slide.lines] }
-}
-
-function slidesWithRepeatedChorus(meeting: Meeting, fallback?: Slide[]): Slide[] {
-  if (!repeatChorus.value || !meeting.songs?.length) return flattenDeck(meeting, fallback)
-  return meeting.songs.flatMap((song) => {
-    const slides = song.slides ?? []
-    const chorus = slides.filter((slide) => /^chorus\b/i.test(slide.section ?? ''))
-    if (!chorus.length) return slides
-    return slides.flatMap((slide, index) => {
-      const next = slides[index + 1]
-      const isLastSlideOfVerse = /^verse\b/i.test(slide.section ?? '') && next?.section !== slide.section
-      const hasFollowingChorus = /^chorus\b/i.test(next?.section ?? '')
-      return isLastSlideOfVerse && !hasFollowingChorus ? [slide, ...chorus.map(cloneSlide)] : [slide]
-    })
-  })
-}
-
-function rebuildDeck() {
-  if (!deckMeeting.value) return
-  const current = activeSlide.value
-  deckSlides.value = slidesWithRepeatedChorus(deckMeeting.value)
-  const currentIndex = current ? deckSlides.value.findIndex((slide) => slide.id === current.id && slide.kind === current.kind) : -1
-  deckIndex.value = Math.max(0, currentIndex)
-}
-
-function adjustTextSize(amount: number) {
-  textScale.value = Math.round(Math.min(1.35, Math.max(.75, textScale.value + amount)) * 100) / 100
-}
-
-async function loadDeck() {
-  if (!presenterToken || deckLoading.value) return
-  deckLoading.value = true
-  deckError.value = ''
-  try {
-    const data = await api<{ deck?: Meeting; meeting?: Meeting; title?: string; slides?: Slide[]; settings?: AppSettings }>(`/api/present/${presenterToken}`)
-    const meeting: Meeting = data.deck ?? data.meeting ?? ({ id: '', status: 'draft' } as Meeting)
-    deckTitle.value = data.title ?? meeting.title ?? 'Song night'
-    deckMeeting.value = meeting
-    if (data.settings && localStorage.getItem(presenterSettingsKey) === null) {
-      textScale.value = data.settings.defaultTextScale
-      repeatChorus.value = data.settings.defaultRepeatChorus
-      showSlideCount.value = data.settings.defaultShowSlideCount
-    }
-    deckSlides.value = slidesWithRepeatedChorus(meeting, data.slides)
-    if (!deckSlides.value.length) throw new Error('This meeting does not have a slide deck yet.')
-    sessionStorage.setItem(deckCacheKey, JSON.stringify({ title: deckTitle.value, meeting, slides: deckSlides.value }))
-    deckReady.value = true
-  } catch (caught) {
-    const cached = sessionStorage.getItem(deckCacheKey)
-    if (cached) {
-      const data = JSON.parse(cached) as { title: string; meeting?: Meeting; slides: Slide[] }
-      deckTitle.value = data.title
-      deckMeeting.value = data.meeting ?? null
-      deckSlides.value = deckMeeting.value ? slidesWithRepeatedChorus(deckMeeting.value) : data.slides
-      deckReady.value = true
-    } else deckError.value = (caught as Error).message
-  } finally { deckLoading.value = false; loading.value = false }
-}
-
-function changeSlide(delta: number) {
-  if (!deckReady.value) return
-  deckIndex.value = Math.min(Math.max(deckIndex.value + delta, 0), deckSlides.value.length - 1)
-}
-async function toggleFullscreen() {
-  try {
-    if (document.fullscreenElement) await document.exitFullscreen()
-    else await document.documentElement.requestFullscreen()
-  } catch { /* Browser may deny programmatic full-screen. */ }
-}
-function presentationKeydown(event: KeyboardEvent) {
-  if (!presenterToken || !deckReady.value) return
-  if ([' ', 'ArrowRight', 'ArrowDown'].includes(event.key)) { event.preventDefault(); changeSlide(1) }
-  else if (['ArrowLeft', 'ArrowUp'].includes(event.key)) { event.preventDefault(); changeSlide(-1) }
-  else if (event.key.toLowerCase() === 'f') void toggleFullscreen()
-  else if (event.key === '-' || event.key === '_') adjustTextSize(-.05)
-  else if (event.key === '=' || event.key === '+') adjustTextSize(.05)
-  else if (event.key.toLowerCase() === 'c') { repeatChorus.value = !repeatChorus.value; rebuildDeck() }
-}
-
 watch([songSearch, songFilter], () => { /* filtering is intentionally instant and local */ })
+watch(() => route.fullPath, () => {
+  if (!isPresenter.value && session.value?.authenticated) void applyRoute()
+})
 watch([notice, error], () => {
   if (toastTimer) window.clearTimeout(toastTimer)
   if (notice.value || error.value) toastTimer = window.setTimeout(() => { notice.value = ''; error.value = '' }, 4000)
 })
-watch([textScale, repeatChorus, showSlideCount], () => {
-  if (!presenterToken) return
-  localStorage.setItem(presenterSettingsKey, JSON.stringify({ textScale: textScale.value, repeatChorus: repeatChorus.value, showSlideCount: showSlideCount.value }))
-})
 onMounted(() => {
-  window.addEventListener('keydown', presentationKeydown)
-  window.addEventListener('popstate', applyRoute)
-  if (presenterToken) {
-    try {
-      const settings = JSON.parse(localStorage.getItem(presenterSettingsKey) ?? '{}') as { textScale?: number; repeatChorus?: boolean; showSlideCount?: boolean }
-      if (typeof settings.textScale === 'number') textScale.value = Math.min(1.35, Math.max(.75, settings.textScale))
-      if (typeof settings.repeatChorus === 'boolean') repeatChorus.value = settings.repeatChorus
-      if (typeof settings.showSlideCount === 'boolean') showSlideCount.value = settings.showSlideCount
-    } catch { /* Default presenter settings are safe. */ }
-    void loadDeck()
-  } else void initialize()
+  if (!isPresenter.value) void initialize()
 })
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', presentationKeydown)
-  window.removeEventListener('popstate', applyRoute)
   if (toastTimer) window.clearTimeout(toastTimer)
 })
 </script>
 
 <template>
-  <main v-if="presenterToken" class="presenter" @click="changeSlide(1)">
-    <div v-if="deckLoading" class="presenter-status">Loading the complete meeting deck…</div>
-    <div v-else-if="deckError" class="presenter-status presenter-error">
-      <p>{{ deckError }}</p><button class="button" @click.stop="loadDeck">Try again</button>
-    </div>
-    <template v-else-if="deckReady && activeSlide">
-      <div class="presenter-heading">{{ deckTitle }}</div>
-      <section class="slide" :class="`slide-${activeSlide.kind}`" :style="{ '--text-scale': textScale }">
-        <p v-if="activeSlide.section" class="slide-section">{{ activeSlide.section }}</p>
-        <h1 v-for="line in activeSlide.lines" :key="line">{{ line }}</h1>
-      </section>
-      <div class="presenter-controls" @click.stop>
-        <button aria-label="Previous slide" :disabled="deckIndex === 0" @click="changeSlide(-1)">←</button>
-        <span v-if="showSlideCount">{{ deckIndex + 1 }} / {{ deckSlides.length }}</span>
-        <button aria-label="Next slide" :disabled="deckIndex === deckSlides.length - 1" @click="changeSlide(1)">→</button>
-        <div class="presenter-divider" aria-hidden="true"></div>
-        <button aria-label="Smaller lyric text" title="Smaller text (−)" @click="adjustTextSize(-.05)">A−</button>
-        <button aria-label="Larger lyric text" title="Larger text (+)" @click="adjustTextSize(.05)">A+</button>
-        <button class="chorus-toggle" :class="{ active: repeatChorus }" :aria-pressed="repeatChorus" title="Repeat chorus after every verse (C)" @click="repeatChorus = !repeatChorus; rebuildDeck()">Ch</button>
-        <button :class="{ active: showSlideCount }" :aria-pressed="showSlideCount" title="Show slide count" @click="showSlideCount = !showSlideCount">#</button>
-        <button class="fullscreen-button" aria-label="Toggle full screen" @click="toggleFullscreen">⛶</button>
-      </div>
-    </template>
-  </main>
+  <PresenterView v-if="isPresenter" />
 
   <div v-else-if="loading" class="loading-page">Opening song management…</div>
 
@@ -590,22 +452,8 @@ onBeforeUnmount(() => {
   </main>
 
   <main v-else class="app-shell">
-    <aside class="sidebar">
-      <div class="brand"><span>♪</span><div><strong>Songbook</strong><small>{{ settings.groupName }}</small></div></div>
-      <nav aria-label="Main navigation">
-        <button :class="{ active: page === 'dashboard' }" @click="selectPage('dashboard')">Dashboard</button>
-        <button :class="{ active: page === 'library' }" @click="selectPage('library')">Song library</button>
-        <button :class="{ active: page === 'meetings' }" @click="selectPage('meetings')">Plan meeting</button>
-        <button :class="{ active: page === 'history' }" @click="selectPage('history')">History</button>
-        <button :class="{ active: page === 'settings' }" @click="selectPage('settings')">Settings</button>
-      </nav>
-      <button class="logout" @click="logout">Sign out</button>
-    </aside>
-
-    <div class="toast-stack" aria-live="polite">
-      <div v-if="error" class="toast toast-error"><span>{{ error }}</span><button @click="error = ''">×</button></div>
-      <div v-if="notice" class="toast"><span>{{ notice }}</span><button @click="notice = ''">×</button></div>
-    </div>
+    <AppSidebar :page="page" :group-name="settings.groupName" @navigate="selectPage" @logout="logout" />
+    <ToastStack :notice="notice" :error="error" @clear-notice="notice = ''" @clear-error="error = ''" />
     <section class="workspace">
 
       <template v-if="page === 'dashboard'">
@@ -660,24 +508,7 @@ onBeforeUnmount(() => {
         <section class="card"><ul class="meeting-list"><li v-for="meeting in recentMeetings" :key="meeting.id"><button @click="openMeeting(meeting)"><span><strong>{{ displayDate(meetingDate(meeting)) }}</strong><small>{{ (meeting.songs ?? []).map((song) => song.title).join(' · ') || 'No songs recorded' }}</small></span><span class="meeting-state" :class="meeting.status">{{ meeting.status }}</span></button></li></ul></section>
       </template>
 
-      <template v-else>
-        <header class="page-header"><div><p class="eyebrow">SETTINGS</p><h1>Songbook settings</h1><p class="muted">Set the group identity, projector defaults, and administrator access.</p></div></header>
-        <div class="settings-grid">
-          <form class="card form-card" @submit.prevent="saveSettings">
-            <div><p class="eyebrow">GENERAL</p><h2>Default experience</h2></div>
-            <label>Group name <input v-model="settings.groupName" maxlength="100" required /></label>
-            <label>Default lyric size <input v-model.number="settings.defaultTextScale" type="range" min="0.75" max="1.35" step="0.05" /><small>{{ Math.round(settings.defaultTextScale * 100) }}%</small></label>
-            <label class="toggle-row"><input v-model="settings.defaultRepeatChorus" type="checkbox" /> Repeat each song’s chorus after every verse</label>
-            <label class="toggle-row"><input v-model="settings.defaultShowSlideCount" type="checkbox" /> Show slide count in the presenter</label>
-            <button class="button" :disabled="isBusy">Save settings</button>
-          </form>
-          <section class="card form-card">
-            <div><p class="eyebrow">USERS</p><h2>Administrators</h2></div>
-            <ul class="user-list"><li v-for="user in users" :key="user.id"><div><strong>{{ user.email }}</strong><small>Added {{ displayDate(user.createdAt.slice(0, 10)) }}</small></div><button class="text-button" :disabled="user.id === session?.user?.id" @click="removeUser(user)">{{ user.id === session?.user?.id ? 'Current user' : 'Remove' }}</button></li></ul>
-            <form class="new-user-form" @submit.prevent="addUser"><label>Email <input v-model="newUser.email" type="email" required /></label><label>Temporary password <input v-model="newUser.password" type="password" minlength="12" required /></label><button class="secondary-button" :disabled="isBusy">Add administrator</button></form>
-          </section>
-        </div>
-      </template>
+      <SettingsView v-else :settings="settings" :users="users" :current-user-id="session?.user?.id" :busy="isBusy" @save="saveSettings" @add-user="addUser" @remove-user="removeUser" />
     </section>
   </main>
 </template>

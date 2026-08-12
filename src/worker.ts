@@ -722,7 +722,9 @@ app.get('/api/present/:viewToken', async (c) => {
   if (!meeting) return jsonError(c, 'Presentation not found.', 404)
   const deck = await assembleDeck(c.env.DB, meeting)
   const slides = deck.songs.flatMap((song: any) => song.slides)
-  return c.json({ title: deck.title || 'Song night', meeting: deck, slides })
+  const settings = serializeSettings(await appSettings(c.env.DB))
+  // The group name is live presentation branding; older meeting titles do not override it.
+  return c.json({ title: settings.groupName || deck.title || 'Song night', meeting: deck, slides, settings })
 })
 
 app.notFound(async (c) => {
