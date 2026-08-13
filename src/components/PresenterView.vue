@@ -15,7 +15,6 @@ const meeting = ref<Meeting | null>(null)
 const textScale = ref(1)
 const presenterFont = ref<AppSettings['defaultPresenterFont']>('libre-baskerville')
 const repeatChorus = ref(false)
-const showSlideCount = ref(true)
 const isRebuilding = ref(false)
 const cacheKey = computed(() => `song-management:deck:${token.value}`)
 const settingsKey = 'song-management:presenter-settings'
@@ -72,7 +71,6 @@ async function loadDeck() {
       if (localStorage.getItem(settingsKey) === null) {
         textScale.value = data.settings.defaultTextScale
         repeatChorus.value = data.settings.defaultRepeatChorus
-        showSlideCount.value = data.settings.defaultShowSlideCount
       }
     }
     slides.value = meeting.value ? expandedSlides(meeting.value, data.slides) : data.slides ?? []
@@ -98,13 +96,12 @@ function keydown(event: KeyboardEvent) {
   else if (event.key.toLowerCase() === 'c') { repeatChorus.value = !repeatChorus.value; rebuildSlides() }
 }
 
-watch([textScale, repeatChorus, showSlideCount], () => localStorage.setItem(settingsKey, JSON.stringify({ textScale: textScale.value, repeatChorus: repeatChorus.value, showSlideCount: showSlideCount.value })))
+watch([textScale, repeatChorus], () => localStorage.setItem(settingsKey, JSON.stringify({ textScale: textScale.value, repeatChorus: repeatChorus.value })))
 onMounted(() => {
   try {
-    const saved = JSON.parse(localStorage.getItem(settingsKey) ?? '{}') as { textScale?: number; repeatChorus?: boolean; showSlideCount?: boolean }
+    const saved = JSON.parse(localStorage.getItem(settingsKey) ?? '{}') as { textScale?: number; repeatChorus?: boolean; }
     if (typeof saved.textScale === 'number') textScale.value = Math.min(1.35, Math.max(.75, saved.textScale))
     if (typeof saved.repeatChorus === 'boolean') repeatChorus.value = saved.repeatChorus
-    if (typeof saved.showSlideCount === 'boolean') showSlideCount.value = saved.showSlideCount
   } catch { /* Defaults remain usable. */ }
   window.addEventListener('keydown', keydown); void loadDeck()
 })
@@ -122,13 +119,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', keydown))
         <h1 v-for="line in activeSlide.lines" :key="line">{{ line }}</h1>
       </section>
       <div class="presenter-controls" aria-label="Presenter controls" @click.stop>
-        <span v-if="showSlideCount" class="presenter-count">{{ index + 1 }} / {{ slides.length }}</span>
+        <span class="presenter-count">{{ index + 1 }} / {{ slides.length }}</span>
         <button aria-label="Previous slide" :disabled="index === 0" @click="changeSlide(-1)">←</button>
         <button aria-label="Next slide" :disabled="index === slides.length - 1" @click="changeSlide(1)">→</button>
         <button title="Smaller text (−)" aria-label="Smaller text" @click="adjustTextSize(-.05)">A−</button>
         <button title="Larger text (+)" aria-label="Larger text" @click="adjustTextSize(.05)">A+</button>
-        <button class="chorus-toggle" :class="{ active: repeatChorus }" title="Repeat chorus after every verse (C)" aria-label="Repeat chorus after every verse" @click="repeatChorus = !repeatChorus; rebuildSlides()">Ch</button>
-        <button :class="{ active: showSlideCount }" title="Show slide count" aria-label="Toggle slide count" @click="showSlideCount = !showSlideCount">#</button>
+        <button class="chorus-toggle" :class="{ active: repeatChorus }" title="Repeat chorus after every verse (C)" aria-label="Repeat chorus after every verse" @click="repeatChorus = !repeatChorus; rebuildSlides()">C</button>
         <button aria-label="Toggle full screen" @click="toggleFullscreen">⛶</button>
       </div>
     </template>
