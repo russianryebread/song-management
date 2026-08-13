@@ -429,17 +429,66 @@ app.use('/api/*', async (c, next) => {
 app.get('/api/songs', async (c) => {
   const q = (c.req.query('q') ?? '').trim().slice(0, 120)
   const filter = c.req.query('filter') ?? 'all'
+  const requestedPage = Number(c.req.query('page') ?? 1)
+  const requestedPageSize = Number(c.req.query('pageSize') ?? 25)
+  const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1
+  const pageSize = Number.isInteger(requestedPageSize) ? Math.min(Math.max(requestedPageSize, 10), 250) : 25
+  const offset = (page - 1) * pageSize
   const orderBy = filter === 'least-used' ? 'use_count ASC, last_used_at ASC, s.title COLLATE NOCASE ASC'
     : filter === 'recent' ? 'last_used_at DESC, s.title COLLATE NOCASE ASC'
       : 's.title COLLATE NOCASE ASC'
   const where = q ? 'WHERE (s.title LIKE ? OR s.hymn_number LIKE ?)' : ''
   const having = filter === 'unused' ? 'HAVING COUNT(ms.id) = 0' : ''
+  const base = `FROM songs s LEFT JOIN meeting_songs ms ON ms.song_id = s.id LEFT JOIN meetings m ON m.id = ms.meeting_id
+    ${where} GROUP BY s.id ${having}`
   const query = `SELECT s.*, COUNT(ms.id) AS use_count, MAX(m.meeting_date) AS last_used_at
     FROM songs s LEFT JOIN meeting_songs ms ON ms.song_id = s.id LEFT JOIN meetings m ON m.id = ms.meeting_id
-    ${where} GROUP BY s.id ${having} ORDER BY ${orderBy} LIMIT 250`
-  const statement = c.env.DB.prepare(query)
-  const rows = q ? await statement.bind(`%${q}%`, `%${q}%`).all<any>() : await statement.all<any>()
-  return c.json({ songs: rows.results.map(serializeSong) })
+    ${where} GROUP BY s.id ${having} ORDER BY ${orderBy} LIMIT ? OFFSET ?`
+  const countQuery = `SELECT COUNT(*) AS total FROM (SELECT s.id ${base})`
+  const match = `%${q}%`
+  const [rows, count] = q
+    ? await Promise.all([
+      c.env.DB.prepare(query).bind(match, match, pageSize, offset).all<any>(),
+      c.env.DB.prepare(countQuery).bind(match, match).first<{ total: number }>(),
+    ])
+    : await Promise.all([
+      c.env.DB.prepare(query).bind(pageSize, offset).all<any>(),
+      c.env.DB.prepare(countQuery).first<{ total: number }>(),
+    ])
+  const total = Number(count?.total ?? 0)
+  return c.json({ songs: rows.results.map(serializeSong), page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) })
+})
+
+app.post('/api/songs/import', async (c) => {
+  const body = await readJson(c)
+  const sourceName = stringField(body?.sourceName, 'sourceName', { max: 200 }) || 'OpenLyrics import'
+  const candidates = Array.isArray(body?.songs) ? body.songs.slice(0, 100) : null
+  if (!candidates?.length) return jsonError(c, 'Provide between one and 100 songs to import.')
+  const now = new Date().toISOString()
+  const imported: any[] = []
+  const skipped: Array<{ title: string; reason: string }> = []
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') { skipped.push({ title: 'Untitled song', reason: 'Invalid song data.' }); continue }
+    const row = candidate as JsonRecord
+    const title = stringField(row.title, 'title', { required: true, max: 300 })
+    const lyricsText = stringField(row.lyricsText, 'lyricsText', { required: true, max: 50_000 })
+    const hymnNumber = stringField(row.hymnNumber, 'hymnNumber', { max: 50 })
+    if (!title || !lyricsText || hymnNumber === null) { skipped.push({ title: title ?? 'Untitled song', reason: 'Title or lyrics are invalid.' }); continue }
+    const parsed = validateSectionedLyrics(lyricsText, title)
+    if (parsed.errors.length) { skipped.push({ title, reason: parsed.errors.join(' ') }); continue }
+    const songId = id()
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO songs (id, hymn_number, title, normalized_title, dedupe_key, lyrics_source_name, lyrics_format, lyrics_text, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'sectioned-v1', ?, 'active', ?, ?)`,
+      ).bind(songId, hymnNumber || null, title, normalizeTitle(title), songDedupeKey(title, hymnNumber || null), sourceName, lyricsText, now, now).run()
+      const saved = await songById(c.env.DB, songId)
+      if (saved) imported.push(serializeSong(saved))
+    } catch {
+      skipped.push({ title, reason: 'A matching title and hymn number is already in the library.' })
+    }
+  }
+  return c.json({ imported, skipped, total: candidates.length })
 })
 
 app.post('/api/songs', async (c) => {

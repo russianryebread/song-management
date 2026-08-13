@@ -16,6 +16,7 @@ const textScale = ref(1)
 const presenterFont = ref<AppSettings['defaultPresenterFont']>('libre-baskerville')
 const repeatChorus = ref(false)
 const showSlideCount = ref(true)
+const isRebuilding = ref(false)
 const cacheKey = computed(() => `song-management:deck:${token.value}`)
 const settingsKey = 'song-management:presenter-settings'
 const activeSlide = computed(() => slides.value[index.value])
@@ -37,10 +38,16 @@ function expandedSlides(source: Meeting, fallback?: Slide[]): Slide[] {
 }
 
 function rebuildSlides() {
-  if (!meeting.value) return
+  if (!meeting.value || isRebuilding.value) return
+  isRebuilding.value = true
   const current = activeSlide.value
-  slides.value = expandedSlides(meeting.value)
-  index.value = Math.max(0, current ? slides.value.findIndex((slide) => slide.id === current.id && slide.kind === current.kind) : 0)
+  try {
+    // Always expand from the saved deck, never from the current display list.
+    // This prevents repeated chorus toggles from accumulating slide copies.
+    slides.value = expandedSlides(meeting.value)
+    const nextIndex = current ? slides.value.findIndex((slide) => slide.id === current.id && slide.kind === current.kind) : 0
+    index.value = Math.max(0, nextIndex)
+  } finally { isRebuilding.value = false }
 }
 
 function changeSlide(amount: number) {
@@ -114,16 +121,15 @@ onBeforeUnmount(() => window.removeEventListener('keydown', keydown))
         <p v-if="activeSlide.section" class="slide-section">{{ activeSlide.section }}</p>
         <h1 v-for="line in activeSlide.lines" :key="line">{{ line }}</h1>
       </section>
-      <div class="presenter-controls" @click.stop>
+      <div class="presenter-controls" aria-label="Presenter controls" @click.stop>
+        <span v-if="showSlideCount" class="presenter-count">{{ index + 1 }} / {{ slides.length }}</span>
         <button aria-label="Previous slide" :disabled="index === 0" @click="changeSlide(-1)">←</button>
-        <span v-if="showSlideCount">{{ index + 1 }} / {{ slides.length }}</span>
         <button aria-label="Next slide" :disabled="index === slides.length - 1" @click="changeSlide(1)">→</button>
-        <div class="presenter-divider" aria-hidden="true"></div>
-        <button title="Smaller text (−)" @click="adjustTextSize(-.05)">A−</button>
-        <button title="Larger text (+)" @click="adjustTextSize(.05)">A+</button>
-        <button class="chorus-toggle" :class="{ active: repeatChorus }" title="Repeat chorus after every verse (C)" @click="repeatChorus = !repeatChorus; rebuildSlides()">Ch</button>
-        <button :class="{ active: showSlideCount }" title="Show slide count" @click="showSlideCount = !showSlideCount">#</button>
-        <button class="fullscreen-button" aria-label="Toggle full screen" @click="toggleFullscreen">⛶</button>
+        <button title="Smaller text (−)" aria-label="Smaller text" @click="adjustTextSize(-.05)">A−</button>
+        <button title="Larger text (+)" aria-label="Larger text" @click="adjustTextSize(.05)">A+</button>
+        <button class="chorus-toggle" :class="{ active: repeatChorus }" title="Repeat chorus after every verse (C)" aria-label="Repeat chorus after every verse" @click="repeatChorus = !repeatChorus; rebuildSlides()">Ch</button>
+        <button :class="{ active: showSlideCount }" title="Show slide count" aria-label="Toggle slide count" @click="showSlideCount = !showSlideCount">#</button>
+        <button aria-label="Toggle full screen" @click="toggleFullscreen">⛶</button>
       </div>
     </template>
   </main>

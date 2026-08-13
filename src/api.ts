@@ -81,6 +81,8 @@ export type UserAccount = {
   createdAt: string
 }
 
+export type SongListResponse = { songs: Song[]; page: number; pageSize: number; total: number; totalPages: number }
+
 type ApiError = Error & { status?: number }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {

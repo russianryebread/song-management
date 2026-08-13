@@ -3,9 +3,10 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   api, getCollection, meetingDate, meetingToken, songLastUsed, songLyrics, songNumber, songUses,
-  type AppSettings, type LyricCandidate, type Meeting, type MeetingSong, type Slide, type Song, type TrustedSource, type UserAccount,
+  type AppSettings, type LyricCandidate, type Meeting, type MeetingSong, type Slide, type Song, type SongListResponse, type TrustedSource, type UserAccount,
 } from './api'
 import { parseLyrics } from './lyrics'
+import { readOpenLyrics } from './openlyrics'
 import AppSidebar from './components/AppSidebar.vue'
 import PresenterView from './components/PresenterView.vue'
 import SettingsView from './components/SettingsView.vue'
@@ -26,9 +27,15 @@ const page = ref<Page>('dashboard')
 const notice = ref('')
 const error = ref('')
 const songs = ref<Song[]>([])
+const librarySongs = ref<Song[]>([])
 const meetings = ref<Meeting[]>([])
 const songSearch = ref('')
 const songFilter = ref('all')
+const songPage = ref(1)
+const songPageSize = 25
+const songTotal = ref(0)
+const songTotalPages = ref(1)
+const importingSongs = ref(false)
 const editingSong = ref<Song | null>(null)
 const lyricCandidates = ref<LyricCandidate[]>([])
 const slidePreview = ref<Slide[]>([])
@@ -41,21 +48,14 @@ const newTrustedSource = ref({ name: '', baseUrl: '' })
 const settings = ref<AppSettings>({ groupName: 'Men’s group', defaultTextScale: 1, defaultPresenterFont: 'libre-baskerville', defaultRepeatChorus: false, defaultShowSlideCount: true })
 const users = ref<UserAccount[]>([])
 let toastTimer: number | undefined
+let songSearchTimer: number | undefined
 
 const emptySong = (): Song => ({ id: '', title: '', hymnNumber: '', sourceUrl: '', lyricsText: '' })
-const apiSongs = computed(() => songs.value)
 const upcomingMeeting = computed(() => meetings.value.find((meeting) => meeting.status === 'draft') ?? null)
 const recentMeetings = computed(() => [...meetings.value].sort((a, b) => meetingDate(b).localeCompare(meetingDate(a))).slice(0, 6))
 const planningMeetings = computed(() => meetings.value.filter((meeting) => meeting.status === 'draft' || meeting.status === 'published'))
 const pastMeetings = computed(() => meetings.value.filter((meeting) => meeting.status === 'past'))
-const shownSongs = computed(() => {
-  const query = songSearch.value.trim().toLocaleLowerCase()
-  return apiSongs.value.filter((song) => {
-    const matches = !query || `${song.title} ${songNumber(song)}`.toLowerCase().includes(query)
-    const uses = songUses(song)
-    return matches && (songFilter.value === 'all' || (songFilter.value === 'unused' && !uses) || (songFilter.value === 'recent' && uses))
-  })
-})
+const shownSongs = computed(() => librarySongs.value)
 const meetingSongChoices = computed(() => {
   const q = meetingSearch.value.toLowerCase().trim()
   return songs.value.filter((song) => !q || `${song.title} ${songNumber(song)}`.toLowerCase().includes(q)).slice(0, 8)
@@ -126,17 +126,34 @@ async function applyRoute() {
 
 async function loadAppData() {
   const [songsResponse, meetingsResponse, sourceResponse, settingsResponse, usersResponse] = await Promise.all([
-    api<Song[] | { songs?: Song[]; items?: Song[] }>('/api/songs'),
+    api<SongListResponse>('/api/songs?page=1&pageSize=250'),
     api<Meeting[] | { meetings?: Meeting[]; items?: Meeting[] }>('/api/meetings'),
     api<{ sources: TrustedSource[] }>('/api/trusted-sources'),
     api<{ settings: AppSettings }>('/api/settings'),
     api<{ users: UserAccount[] }>('/api/users'),
   ])
-  songs.value = getCollection(songsResponse)
+  songs.value = songsResponse.songs
+  librarySongs.value = songsResponse.songs.slice(0, songPageSize)
+  songTotal.value = songsResponse.total
+  songTotalPages.value = songsResponse.totalPages
   meetings.value = getCollection(meetingsResponse)
   trustedSources.value = sourceResponse.sources
   settings.value = settingsResponse.settings
   users.value = usersResponse.users
+}
+
+async function loadLibraryPage(page = songPage.value) {
+  const targetPage = Math.max(1, page)
+  isBusy.value = true
+  try {
+    const params = new URLSearchParams({ page: String(targetPage), pageSize: String(songPageSize), filter: songFilter.value })
+    if (songSearch.value.trim()) params.set('q', songSearch.value.trim())
+    const result = await api<SongListResponse>(`/api/songs?${params}`)
+    librarySongs.value = result.songs
+    songPage.value = result.page
+    songTotal.value = result.total
+    songTotalPages.value = result.totalPages
+  } catch (caught) { error.value = (caught as Error).message } finally { isBusy.value = false }
 }
 
 async function initialize() {
@@ -206,13 +223,37 @@ async function saveSong() {
       }),
     })
     const saved = payload(result)
-    if (isNew) songs.value.unshift(saved)
-    else songs.value = songs.value.map((existing) => existing.id === saved.id ? saved : existing)
+    await loadAppData()
+    await loadLibraryPage(isNew ? 1 : songPage.value)
     editingSong.value = { ...saved, lyricsText: songLyrics(saved) }
     slidePreview.value = parseLyrics(saved.title, songLyrics(saved))
     if (isNew) setPath(`/library/${saved.id}`, { replace: true })
     notice.value = 'Song saved.'
   } catch (caught) { error.value = (caught as Error).message } finally { isBusy.value = false }
+}
+
+async function importOpenLyrics(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files ?? [])
+  input.value = ''
+  if (!files.length || importingSongs.value) return
+  importingSongs.value = true
+  try {
+    const parsed = await readOpenLyrics(files)
+    let imported = 0
+    const skipped = [...parsed.issues]
+    for (let start = 0; start < parsed.songs.length; start += 100) {
+      const batch = parsed.songs.slice(start, start + 100)
+      const result = await api<{ imported: Song[]; skipped: Array<{ title: string; reason: string }> }>('/api/songs/import', {
+        method: 'POST', body: JSON.stringify({ sourceName: 'OpenLyrics import', songs: batch }),
+      })
+      imported += result.imported.length
+      skipped.push(...result.skipped.map((issue) => ({ file: issue.title, reason: issue.reason })))
+    }
+    await loadAppData()
+    await loadLibraryPage(1)
+    notice.value = skipped.length ? `Imported ${imported} song${imported === 1 ? '' : 's'}; ${skipped.length} skipped.` : `Imported ${imported} song${imported === 1 ? '' : 's'}.`
+  } catch (caught) { error.value = (caught as Error).message } finally { importingSongs.value = false }
 }
 
 async function findLyrics() {
@@ -437,7 +478,10 @@ async function saveMeetingSlide(slide: Slide, rawLines: string) {
   } catch (caught) { error.value = (caught as Error).message }
 }
 
-watch([songSearch, songFilter], () => { /* filtering is intentionally instant and local */ })
+watch([songSearch, songFilter], () => {
+  if (songSearchTimer) window.clearTimeout(songSearchTimer)
+  songSearchTimer = window.setTimeout(() => { void loadLibraryPage(1) }, 220)
+})
 watch(() => route.fullPath, () => {
   if (!isPresenter.value && session.value?.authenticated) void applyRoute()
 })
@@ -450,6 +494,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   if (toastTimer) window.clearTimeout(toastTimer)
+  if (songSearchTimer) window.clearTimeout(songSearchTimer)
 })
 </script>
 
@@ -488,10 +533,11 @@ onBeforeUnmount(() => {
       </template>
 
       <template v-else-if="page === 'library'">
-        <header class="page-header"><div><button v-if="editingSong" class="text-button back-button" @click="backToLibrary">← Back to library</button><p class="eyebrow">LIBRARY</p><h1>{{ editingSong ? (editingSong.id ? 'Edit song' : 'New song') : 'Songs' }}</h1></div><button v-if="!editingSong" class="button" @click="editSong()">+ Add song</button></header>
+        <header class="page-header"><div><button v-if="editingSong" class="text-button back-button" @click="backToLibrary">← Back to library</button><p class="eyebrow">LIBRARY</p><h1>{{ editingSong ? (editingSong.id ? 'Edit song' : 'New song') : 'Songs' }}</h1></div><div v-if="!editingSong" class="header-actions"><label class="secondary-button import-button">{{ importingSongs ? 'Importing…' : 'Import OpenLyrics' }}<input type="file" accept=".xml,.zip,application/zip,text/xml" multiple :disabled="importingSongs" @change="importOpenLyrics" /></label><button class="button" @click="editSong()">+ Add song</button></div></header>
         <section v-if="!editingSong" class="card library">
           <div class="search-bar"><input v-model="songSearch" placeholder="Search title or hymn number" /><select v-model="songFilter"><option value="all">All songs</option><option value="unused">Never used</option><option value="recent">Used before</option></select></div>
-          <div class="table-wrap"><table><thead><tr><th>Song</th><th>Used</th><th>Last sung</th><th></th></tr></thead><tbody><tr v-for="song in shownSongs" :key="song.id"><td><strong>{{ song.title }}</strong><small v-if="songNumber(song)">#{{ songNumber(song) }}</small></td><td>{{ songUses(song) }}×</td><td>{{ displayDate(songLastUsed(song)) }}</td><td><button class="text-button" @click="editSong(song)">Edit</button></td></tr></tbody></table></div>
+          <div class="table-wrap"><table><thead><tr><th>Song</th><th>Used</th><th>Last sung</th><th></th></tr></thead><tbody><tr v-for="song in shownSongs" :key="song.id"><td><button class="song-title-link" @click="editSong(song)">{{ song.title }}</button><small v-if="songNumber(song)">#{{ songNumber(song) }}</small></td><td>{{ songUses(song) }}×</td><td>{{ displayDate(songLastUsed(song)) }}</td><td><button class="text-button" @click="editSong(song)">Edit</button></td></tr><tr v-if="!shownSongs.length"><td colspan="4" class="muted">No songs match this search.</td></tr></tbody></table></div>
+          <nav class="pagination" aria-label="Song library pages"><span>{{ songTotal }} songs · Page {{ songPage }} of {{ songTotalPages }}</span><div><button class="secondary-button" :disabled="isBusy || songPage === 1" @click="loadLibraryPage(songPage - 1)">Previous</button><button class="secondary-button" :disabled="isBusy || songPage >= songTotalPages" @click="loadLibraryPage(songPage + 1)">Next</button></div></nav>
         </section>
         <form v-else class="editor-grid" @submit.prevent="saveSong">
           <section class="card form-card"><div class="form-row"><label>Title <input id="song-title" v-model="editingSong.title" required /></label><label>Hymn number <input v-model="editingSong.hymnNumber" inputmode="numeric" /></label></div><label>Source URL <input v-model="editingSong.sourceUrl" type="url" placeholder="Direct song page, e.g. https://hymnary.org/..." /></label><p class="field-help">For lookup, paste a direct song page from an allowed site, save the song, then choose <strong>Find lyrics</strong>.</p><div class="editor-actions"><button type="button" class="secondary-button" :disabled="isBusy || !editingSong.id" @click="findLyrics">Find lyrics</button><button type="button" class="secondary-button" :disabled="isBusy || !currentLyrics" @click="formatText">Format with AI</button></div><div v-if="lyricCandidates.length" class="candidate-list"><h3>Trusted-source results</h3><article v-for="candidate in lyricCandidates" :key="candidate.id ?? candidate.url"><div><strong>{{ candidate.title }}</strong><small>{{ candidate.sourceName ?? candidate.source_name ?? candidate.provider ?? 'Trusted source' }}</small><a v-if="candidate.sourceUrl ?? candidate.source_url ?? candidate.url" :href="candidate.sourceUrl ?? candidate.source_url ?? candidate.url" target="_blank" rel="noreferrer">View source</a></div><button type="button" class="text-button" :disabled="candidate.available === false || !candidate.id" @click="useCandidate(candidate)">Use</button></article></div><label>Lyrics <textarea v-model="currentLyrics" rows="20" spellcheck="true" @input="updatePreview" placeholder="[verse 1]\nOne displayed line per row\n|||\nA forced new slide"></textarea></label><p class="field-help">Use <code>[verse 1]</code> or <code>[chorus]</code> for a section. A standalone <code>|||</code> starts a new slide. Slides never exceed four lines.</p><button class="button" :disabled="isBusy">{{ isBusy ? 'Saving…' : 'Save song' }}</button></section>
