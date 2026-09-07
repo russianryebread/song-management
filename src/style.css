@@ -683,6 +683,9 @@ td strong {
     grid-template-columns: 1.7rem minmax(0, 1fr) auto;
     padding: 0.7rem 1.2rem;
 }
+.planned-list li.muted {
+    display: block;
+}
 .position {
     color: #77857c;
     font-size: 0.8rem;

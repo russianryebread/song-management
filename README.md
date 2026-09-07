@@ -29,17 +29,29 @@ return to the intended record after sign-in.
 
 ## Trusted lyric sources
 
-The song library includes an editable **Allowed lookup sites** list. It begins with
+Settings includes an editable **Allowed lookup sites** list. It begins with
 `https://hymnary.org/` and `https://hymnal.net/`; add, edit, disable, or remove
-sites there. To import lyrics, save a song with the specific trusted page in its
-**Source URL**, choose **Find lyrics**, then **Use** the result. The imported text
+sites there. The checkbox explicitly shows whether each site is enabled for lookup.
+To import lyrics, enter the specific trusted page in a saved song’s **Source URL**,
+choose **Find lyrics**, then **Use** the result. URL edits apply immediately, without
+saving first. Lookup imports a direct page; it does not search entire websites. The imported text
 is only a draft: review it and save it before it becomes part of the library.
 
 You can also paste lyrics directly and choose **Format with AI**. The deterministic
-fallback recognizes the numbered Hymnary and Hymnal.net styles, including
-`Refrain:` labels and an unlabeled four-line refrain between numbered verses. It
-writes the editable sectioned format and the viewer always limits lyric slides to
-four lines.
+fallback recognizes explicit numbered verses and section labels, preserves stanza
+boundaries, and never guesses an unlabeled chorus. AI output must preserve lyric
+word order and counts. If AI is unavailable or fails validation, the editor clearly
+identifies basic formatting. Formatting also works before a new song is saved.
+The viewer always limits lyric slides to four lines.
+
+The library and meeting song picker share full-library search (title, number, and
+lyrics), independent usage/lyrics filters, sorting, previews, and pagination.
+Meetings lists active meetings above history; `/history` redirects to `/meetings`.
+Usage counts include all linked meeting records, including drafts, consistently
+in the library and meeting details.
+
+Run `npm test` (Node 22.13+ for built-in SQLite) for API and lyric regressions, and
+`npm run build` for type checking and the production frontend build.
 
 ## Deployment
 

@@ -66,58 +66,43 @@ export function validateSectionedLyrics(lyricsText: string, title?: string): Par
   return parsed
 }
 
-/**
- * Gives pasted, unstructured text a safe draft shape. It deliberately does not
- * invent labels, words, or slide breaks; review in the editor remains required.
- */
+/** Normalize explicit headings and stanza boundaries without guessing lyric content. */
 export function normalizeLyricsDraft(text: string): string {
   const normalized = text.replace(/\r\n?/g, '\n').trim()
   if (!normalized) return ''
-  if (normalized.split('\n').some((line) => SECTION_HEADER.test(line.trim()))) return normalized
-
-  type Section = { label: string; lines: string[] }
-  const sections: Section[] = []
-  let active: Section | null = null
-  let chorusNumber = 0
-  const startSection = (label: string): Section => {
-    const section = { label, lines: [] }
-    active = section
-    return section
-  }
-  const finishSection = (splitUnlabelledRefrain = false) => {
-    if (!active) return
-    const lines = active.lines.filter(Boolean)
-    if (splitUnlabelledRefrain && /^verse \d+$/i.test(active.label) && lines.length === 8) {
-      sections.push({ label: active.label, lines: lines.slice(0, 4) })
-      chorusNumber += 1
-      sections.push({ label: `chorus ${chorusNumber}`, lines: lines.slice(4) })
-    } else if (lines.length) {
-      sections.push({ label: active.label, lines })
+  const output: string[] = []
+  let verse = 0
+  let hasSection = false
+  let stanzaBreak = false
+  for (const raw of normalized.split('\n')) {
+    const line = raw.trim()
+    if (!line) { stanzaBreak = true; continue }
+    const bracket = line.match(SECTION_HEADER)
+    const heading = line.match(/^(verse|chorus|refrain|bridge|intro|outro|tag|ending)(?:\s+(\d+))?\s*:?$/i)
+    const numbered = line.match(/^(\d{1,2})(?:[.)]\s*|\s+)(.*)$/) ?? line.match(/^(\d{1,2})$/)
+    if (bracket || heading || numbered) {
+      const label = bracket ? bracket[1] : heading ? `${heading[1].toLowerCase() === 'refrain' ? 'chorus' : heading[1].toLowerCase()}${heading[2] ? ` ${heading[2]}` : ''}` : `verse ${numbered![1]}`
+      output.push(`[${label}]`)
+      const number = label.match(/^verse\s+(\d+)$/i)
+      if (number) verse = Math.max(verse, Number(number[1]))
+      if (numbered?.[2]) output.push(numbered[2])
+      hasSection = true
+    } else if (line === SLIDE_BREAK) {
+      // A break after four lines is already satisfied by the parser.
+      let count = 0
+      for (let i = output.length - 1; i >= 0 && !SECTION_HEADER.test(output[i]) && output[i] !== SLIDE_BREAK; i--) count++
+      if (count % 4) output.push(line)
+    } else {
+      if (!hasSection) { output.push(`[verse ${++verse}]`); hasSection = true }
+      else if (stanzaBreak && output.length && !SECTION_HEADER.test(output[output.length - 1]) && output[output.length - 1] !== SLIDE_BREAK) {
+        // Blank stanzas start a slide, without inventing a chorus or verse label.
+        let count = 0
+        for (let i = output.length - 1; i >= 0 && !SECTION_HEADER.test(output[i]) && output[i] !== SLIDE_BREAK; i--) count++
+        if (count % 4) output.push(SLIDE_BREAK)
+      }
+      output.push(line)
     }
-    active = null
+    stanzaBreak = false
   }
-
-  for (const rawLine of normalized.split('\n')) {
-    const line = rawLine.trim()
-    if (!line) continue
-    const refrain = line.match(/^(?:refrain|chorus)\s*:?\s*(.*)$/i)
-    if (refrain) {
-      finishSection()
-      chorusNumber += 1
-      const section = startSection(`chorus ${chorusNumber}`)
-      if (refrain[1]) section.lines.push(refrain[1])
-      continue
-    }
-    const verse = line.match(/^(\d{1,2})\s*[.)]?\s*(.*)$/)
-    if (verse && (!verse[2] || verse[2].trim().length > 2)) {
-      finishSection(true)
-      const section = startSection(`verse ${verse[1]}`)
-      if (verse[2].trim()) section.lines.push(verse[2].trim())
-      continue
-    }
-    const section = active ?? startSection('verse 1')
-    section.lines.push(line)
-  }
-  finishSection()
-  return sections.map((section) => `[${section.label}]\n${section.lines.join('\n')}`).join('\n\n')
+  return output.join('\n')
 }

@@ -10,7 +10,8 @@
     "deploy": "npm run build && wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply song-management --local",
     "seed:history": "node scripts/import-wed-night-songs.mjs",
-    "db:seed:local": "npm run seed:history && wrangler d1 execute song-management --local --file data/wed-night-songs.seed.sql"
+    "db:seed:local": "npm run seed:history && wrangler d1 execute song-management --local --file data/wed-night-songs.seed.sql",
+    "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
     "@vitejs/plugin-vue": "^5.2.3",

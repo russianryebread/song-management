@@ -26,7 +26,7 @@ const day = 86_400_000
 // Cloudflare Workers currently caps PBKDF2 at 100,000 iterations.
 const passwordIterations = 100_000
 
-function jsonError(c: any, message: string, status?: 400 | 401 | 404 | 409 | 422 | 501) {
+function jsonError(c: any, message: string, status: 400 | 401 | 404 | 409 | 422 | 501 = 400) {
   return c.json({ error: message }, status)
 }
 
@@ -158,7 +158,7 @@ function normalizedHost(baseUrl: string): string | null {
 function isTrustedUrl(value: string, sources: TrustedSource[]): boolean {
   try {
     const url = new URL(value)
-    if (url.protocol !== 'https:') return false
+    if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')) return false
     const host = url.hostname.replace(/^www\./, '').toLowerCase()
     return sources.some((source) => source.enabled && normalizedHost(source.base_url) === host)
   } catch { return false }
@@ -190,46 +190,67 @@ async function trustedSources(db: D1Database, includeDisabled = false): Promise<
   return (await db.prepare(query).all<TrustedSource>()).results
 }
 
-async function fetchTrustedText(url: string, sources: TrustedSource[]): Promise<string> {
-  if (!isTrustedUrl(url, sources)) throw new Error('That URL is not in your trusted source list.')
-  const response = await fetch(url, { headers: { Accept: 'text/html,application/xhtml+xml,application/pdf;q=0.7' }, redirect: 'follow' })
-  if (!response.ok) throw new Error(`The trusted source returned ${response.status}.`)
-  const finalUrl = response.url || url
-  if (!isTrustedUrl(finalUrl, sources)) throw new Error('The trusted source redirected to an unapproved URL.')
-  const type = response.headers.get('content-type') ?? ''
-  if (!/html|text\//i.test(type)) throw new Error('This trusted page is not HTML. Paste its authorized lyrics into the editor instead.')
-  const text = textAroundLyricStart(await response.text())
-  if (text.length < 20) throw new Error('No usable lyric text was found on that page.')
-  return text
+export async function fetchTrustedText(url: string, sources: TrustedSource[]): Promise<string> {
+  for (let redirect = 0; redirect <= 5; redirect++) {
+    if (!isTrustedUrl(url, sources)) throw new Error('That URL is not enabled in Allowed lookup sites in Settings.')
+    const response = await fetch(url, { headers: { Accept: 'text/html,text/plain' }, redirect: 'manual', signal: AbortSignal.timeout(12_000) })
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      await response.body?.cancel()
+      const location = response.headers.get('location')
+      if (!location) throw new Error('The source returned a redirect without a destination.')
+      url = new URL(location, url).href
+      continue
+    }
+    if (!response.ok) { await response.body?.cancel(); throw new Error(`The lookup site returned ${response.status}.`) }
+    const type = response.headers.get('content-type') ?? ''
+    if (!/html|text\//i.test(type)) { await response.body?.cancel(); throw new Error('This page is not HTML or text. Paste its lyrics into the editor instead.') }
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('The page was empty.')
+    const decoder = new TextDecoder()
+    let body = ''
+    let size = 0
+    try {
+      while (true) {
+        const chunk = await reader.read()
+        if (chunk.done) break
+        size += chunk.value.byteLength
+        if (size > 1_000_000) { await reader.cancel(); throw new Error('This page is too large. Paste its lyrics into the editor instead.') }
+        body += decoder.decode(chunk.value, { stream: true })
+      }
+      body += decoder.decode()
+    } finally { reader.releaseLock() }
+    const text = /html/i.test(type) ? textAroundLyricStart(body) : body.trim()
+    if (text.length < 20) throw new Error('No usable lyric text was found on that page.')
+    return text
+  }
+  throw new Error('The source redirected too many times.')
 }
 
-function words(text: string): string[] {
-  return text.toLocaleLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').match(/[a-z0-9]+/g) ?? []
+function lyricWords(text: string): string[] {
+  return text.split(/\r?\n/).filter(line => !/^\s*(?:\[[^\]]+\]|\|\|\|)\s*$/.test(line))
+    .join(' ').normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
 }
 
-function onlyUsesSourceWords(candidate: string, source: string): boolean {
-  const lyricOnly = (text: string) => text.split(/\r?\n/).filter((line) => !/^\s*(?:\[[^\]]+\]|\|\|\|)\s*$/.test(line)).join('\n')
-  const counts = (text: string) => words(text).reduce((result, word) => {
-    result.set(word, (result.get(word) ?? 0) + 1)
-    return result
-  }, new Map<string, number>())
-  const candidateCounts = counts(lyricOnly(candidate))
-  const sourceCounts = counts(lyricOnly(source))
-  if (candidateCounts.size !== sourceCounts.size) return false
-  return [...sourceCounts].every(([word, count]) => candidateCounts.get(word) === count)
+export function onlyUsesSourceWords(candidate: string, source: string): boolean {
+  const actual = lyricWords(candidate)
+  const expected = lyricWords(normalizeLyricsDraft(source))
+  return actual.length === expected.length && expected.every((word, index) => actual[index] === word)
 }
 
-async function formatLyricsWithAi(ai: AiBinding | undefined, title: string, sourceText: string): Promise<string | null> {
-  if (!ai) return null
+export async function formatLyricsWithAi(ai: AiBinding | undefined, title: string, sourceText: string): Promise<string | null> {
+  if (!ai || sourceText.length > 12_000) return null
+  sourceText = normalizeLyricsDraft(sourceText)
   const prompt = `Convert the supplied lyrics into the sectioned-v1 song format. Return ONLY the formatted plain text.\n\nRules:\n- Do not add, remove, or change lyric words.\n- Use [verse 1], [chorus 1], [bridge], etc. for clear sections.\n- Preserve original lyric line breaks where practical.\n- A standalone ||| may force a slide break, but use it sparingly.\n- No explanatory prose or Markdown fences.\n- The parser displays at most four lines per slide.\n\nTitle: ${title}\n\nLyrics:\n${sourceText}`
+  let timeout: ReturnType<typeof setTimeout> | undefined
   try {
-    const result = await ai.run('@cf/meta/llama-3.1-8b-instruct-fast', {
+    const result = await Promise.race([ai.run('@cf/meta/llama-3.1-8b-instruct-fast', {
       messages: [
         { role: 'system', content: 'You format hymn lyrics precisely and never invent text.' },
         { role: 'user', content: prompt },
       ],
       max_tokens: 4096,
-    }) as { response?: string }
+      temperature: 0,
+    }), new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error('AI formatting timed out')), 20_000) })]) as { response?: string }
     const text = result.response?.replace(/^```(?:text)?\s*/i, '').replace(/\s*```$/, '').trim()
     if (!text || !onlyUsesSourceWords(text, sourceText)) return null
     const validation = validateSectionedLyrics(text, title)
@@ -237,7 +258,7 @@ async function formatLyricsWithAi(ai: AiBinding | undefined, title: string, sour
   } catch {
     // Formatting remains usable when Workers AI is disabled, unavailable, or rate-limited.
     return null
-  }
+  } finally { if (timeout) clearTimeout(timeout) }
 }
 
 async function insertSlides(db: D1Database, meetingSongId: string, slides: LyricSlide[]): Promise<void> {
@@ -272,7 +293,10 @@ async function slidesForSong(db: D1Database, meetingSongId: string, song: any): 
 async function assembleDeck(db: D1Database, meeting: any) {
   const rows = await db.prepare(
     `SELECT ms.id AS meeting_song_id, ms.position AS song_position, s.id AS song_id, s.title,
-            s.hymn_number, sl.id AS slide_id, sl.position AS slide_position, sl.kind, sl.section, sl.lines_json
+            s.hymn_number,
+            (SELECT COUNT(*) FROM meeting_songs usage WHERE usage.song_id = s.id) AS use_count,
+            (SELECT MAX(m.meeting_date) FROM meeting_songs usage JOIN meetings m ON m.id = usage.meeting_id WHERE usage.song_id = s.id) AS last_used_at,
+            sl.id AS slide_id, sl.position AS slide_position, sl.kind, sl.section, sl.lines_json
      FROM meeting_songs ms
      JOIN songs s ON s.id = ms.song_id
      LEFT JOIN meeting_slides sl ON sl.meeting_song_id = ms.id
@@ -292,6 +316,8 @@ async function assembleDeck(db: D1Database, meeting: any) {
         title: row.title,
         hymnNumber: row.hymn_number,
         hymn_number: row.hymn_number,
+        useCount: Number(row.use_count ?? 0),
+        lastUsed: row.last_used_at ?? null,
         position: row.song_position,
         slides: [],
       }
@@ -429,34 +455,37 @@ app.use('/api/*', async (c, next) => {
 app.get('/api/songs', async (c) => {
   const q = (c.req.query('q') ?? '').trim().slice(0, 120)
   const filter = c.req.query('filter') ?? 'all'
+  const lyrics = c.req.query('lyrics') ?? 'all'
+  const sort = c.req.query('sort') ?? (['recent', 'least-used'].includes(filter) ? filter : 'title')
   const requestedPage = Number(c.req.query('page') ?? 1)
-  const requestedPageSize = Number(c.req.query('pageSize') ?? 25)
-  const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1
-  const pageSize = Number.isInteger(requestedPageSize) ? Math.min(Math.max(requestedPageSize, 10), 250) : 25
-  const offset = (page - 1) * pageSize
-  const orderBy = filter === 'least-used' ? 'use_count ASC, last_used_at ASC, s.title COLLATE NOCASE ASC'
-    : filter === 'recent' ? 'last_used_at DESC, s.title COLLATE NOCASE ASC'
-      : 's.title COLLATE NOCASE ASC'
-  const where = q ? 'WHERE (s.title LIKE ? OR s.hymn_number LIKE ?)' : ''
-  const having = filter === 'unused' ? 'HAVING COUNT(ms.id) = 0' : ''
+  const requestedSize = Number(c.req.query('pageSize') ?? 25)
+  const pageSize = Number.isInteger(requestedSize) ? Math.min(Math.max(requestedSize, 10), 250) : 25
+  const orders: Record<string, string> = {
+    title: 's.title COLLATE NOCASE ASC',
+    number: "CASE WHEN COALESCE(s.hymn_number, '') = '' THEN 1 ELSE 0 END, CAST(s.hymn_number AS INTEGER), s.hymn_number",
+    recent: 'last_used_at DESC',
+    'least-used': 'use_count ASC, last_used_at ASC',
+    'most-used': 'use_count DESC, last_used_at DESC',
+    oldest: 'last_used_at ASC',
+  }
+  const terms = q.split(/\s+/).filter(Boolean)
+  const conditions = terms.map(() => "(s.title LIKE ? ESCAPE '\\' OR s.normalized_title LIKE ? ESCAPE '\\' OR s.hymn_number LIKE ? ESCAPE '\\' OR s.lyrics_text LIKE ? ESCAPE '\\')")
+  if (lyrics === 'ready') conditions.push("TRIM(COALESCE(s.lyrics_text, '')) != ''")
+  if (lyrics === 'missing') conditions.push("TRIM(COALESCE(s.lyrics_text, '')) = ''")
+  const escape = (value: string) => value.replace(/[\\%_]/g, '\\$&')
+  const bindings = terms.flatMap(term => [`%${escape(term)}%`, `%${escape(normalizeTitle(term) || term)}%`, `%${escape(term)}%`, `%${escape(term)}%`])
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+  const having = filter === 'unused' ? 'HAVING COUNT(ms.id) = 0' : ['used', 'recent'].includes(filter) ? 'HAVING COUNT(ms.id) > 0' : ''
   const base = `FROM songs s LEFT JOIN meeting_songs ms ON ms.song_id = s.id LEFT JOIN meetings m ON m.id = ms.meeting_id
     ${where} GROUP BY s.id ${having}`
-  const query = `SELECT s.*, COUNT(ms.id) AS use_count, MAX(m.meeting_date) AS last_used_at
-    FROM songs s LEFT JOIN meeting_songs ms ON ms.song_id = s.id LEFT JOIN meetings m ON m.id = ms.meeting_id
-    ${where} GROUP BY s.id ${having} ORDER BY ${orderBy} LIMIT ? OFFSET ?`
-  const countQuery = `SELECT COUNT(*) AS total FROM (SELECT s.id ${base})`
-  const match = `%${q}%`
-  const [rows, count] = q
-    ? await Promise.all([
-      c.env.DB.prepare(query).bind(match, match, pageSize, offset).all<any>(),
-      c.env.DB.prepare(countQuery).bind(match, match).first<{ total: number }>(),
-    ])
-    : await Promise.all([
-      c.env.DB.prepare(query).bind(pageSize, offset).all<any>(),
-      c.env.DB.prepare(countQuery).first<{ total: number }>(),
-    ])
+  const count = await c.env.DB.prepare(`SELECT COUNT(*) AS total FROM (SELECT s.id ${base})`).bind(...bindings).first<{ total: number }>()
   const total = Number(count?.total ?? 0)
-  return c.json({ songs: rows.results.map(serializeSong), page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) })
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const page = Math.min(totalPages, Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1)
+  const rows = await c.env.DB.prepare(`SELECT s.*, COUNT(ms.id) AS use_count, MAX(m.meeting_date) AS last_used_at ${base}
+    ORDER BY ${orders[sort] ?? orders.title}, s.title COLLATE NOCASE, s.id LIMIT ? OFFSET ?`)
+    .bind(...bindings, pageSize, (page - 1) * pageSize).all<any>()
+  return c.json({ songs: rows.results.map(serializeSong), page, pageSize, total, totalPages })
 })
 
 app.post('/api/songs/import', async (c) => {
@@ -607,29 +636,34 @@ app.post('/api/songs/:id/preview-slides', async (c) => {
   return parsed.errors.length ? c.json({ error: 'Lyrics are invalid.', details: parsed.errors }, 422) : c.json({ slides: parsed.slides })
 })
 
-app.post('/api/songs/:id/format-text', async (c) => {
-  const song = await songById(c.env.DB, c.req.param('id'))
-  if (!song) return jsonError(c, 'Song not found.', 404)
+app.on('POST', ['/api/format-text', '/api/songs/:id/format-text'], async (c) => {
   const body = await readJson(c)
+  const songId = c.req.param('id')
+  const song = songId ? await songById(c.env.DB, songId) : { title: stringField(body?.title, 'title', { max: 300 }) || 'Untitled song' }
+  if (!song) return jsonError(c, 'Song not found.', 404)
   const sourceText = stringField(body?.sourceText ?? body?.lyricsText, 'sourceText', { required: true, max: 50_000 })
   if (!sourceText) return jsonError(c, 'Source text is required.')
   // The model only receives leader-provided/approved text; its response is checked
   // against that source before it is ever returned to the editor.
-  const lyricsText = await formatLyricsWithAi(c.env.AI, song.title, sourceText) ?? normalizeLyricsDraft(sourceText)
+  const aiText = await formatLyricsWithAi(c.env.AI, song.title, sourceText)
+  const lyricsText = aiText ?? normalizeLyricsDraft(sourceText)
   const parsed = validateSectionedLyrics(lyricsText, song.title)
-  return c.json({ lyricsText, slides: parsed.slides, provider: c.env.AI ? 'workers-ai-or-deterministic-fallback' : 'deterministic-draft', requiresReview: true })
+  if (parsed.errors.length) return c.json({ error: parsed.errors.join(' ') }, 422)
+  return c.json({ lyricsText, slides: parsed.slides, provider: aiText ? 'workers-ai' : 'deterministic-draft', requiresReview: true })
 })
 
 app.post('/api/songs/:id/find-lyrics', async (c) => {
   const song = await songById(c.env.DB, c.req.param('id'))
   if (!song) return jsonError(c, 'Song not found.', 404)
   const sources = await trustedSources(c.env.DB)
-  const sourceUrl = song.source_url ?? ''
+  const body = await readJson(c)
+  const sourceUrl = stringField(body?.sourceUrl ?? song.source_url, 'sourceUrl', { max: 2_000 })
+  if (sourceUrl === null) return jsonError(c, 'Source URL is invalid.')
   const source = sources.find((item) => normalizedHost(item.base_url) === normalizedHost(sourceUrl))
   const candidates = source && isTrustedUrl(sourceUrl, sources)
     ? [{ id: sourceUrl, title: song.title, sourceName: source.name, sourceUrl, available: true }]
     : []
-  return c.json({ candidates, message: candidates.length ? 'Choose the source to import a reviewable lyric draft.' : 'Set this song’s source URL to a page from your trusted source list.' })
+  return c.json({ candidates, message: candidates.length ? 'Choose the source to import a reviewable lyric draft.' : !sources.length ? 'No lookup sites are enabled. Enable a site in Settings.' : sourceUrl ? 'This page’s domain is not enabled for lookup. Check Allowed lookup sites in Settings.' : 'Enter a direct song page URL from an enabled site in Settings. Enabling a site permits imports; it does not automatically locate a song page.' })
 })
 
 app.post('/api/songs/:id/use-lyric-candidate', async (c) => {
