@@ -922,6 +922,11 @@ td strong {
 .presenter-error .button {
     margin-top: 0.5rem;
 }
+
+.mb-2 {
+    margin-bottom: 2rem;
+}
+
 @media (max-width: 760px) {
     .app-shell {
         grid-template-columns: 1fr;
