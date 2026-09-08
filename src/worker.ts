@@ -240,12 +240,12 @@ export function onlyUsesSourceWords(candidate: string, source: string): boolean 
 export async function formatLyricsWithAi(ai: AiBinding | undefined, title: string, sourceText: string): Promise<string | null> {
   if (!ai || sourceText.length > 12_000) return null
   sourceText = normalizeLyricsDraft(sourceText)
-  const prompt = `Convert the supplied lyrics into the sectioned-v1 song format. Return ONLY the formatted plain text.\n\nRules:\n- Do not add, remove, or change lyric words.\n- Use [verse 1], [chorus 1], [bridge], etc. for clear sections.\n- Preserve original lyric line breaks where practical.\n- A standalone ||| may force a slide break, but use it sparingly.\n- No explanatory prose or Markdown fences.\n- The parser displays at most four lines per slide.\n\nTitle: ${title}\n\nLyrics:\n${sourceText}`
+  const prompt = `Convert the supplied lyrics into the sectioned-v1 song format. Return ONLY the formatted plain text.\n\nRules:\n- Do not add, remove, or change lyric words.\n- Use [verse 1], [chorus 1], [bridge], etc. for clear sections.\n- Preserve original lyric line breaks where practical, but if the lines are too long, break it at a logical poem cadence point or punctuation mark, so it doesn't wrap on the formatted slide.\n- A standalone ||| may force a slide break, but use it sparingly.\n- No explanatory prose or Markdown fences.\n- The parser displays at most four lines per slide.\n- If a verse ends with [Chorus] or [Refrain] strip that formatting. The only time [chorus] shows up in the lyrics is on top of the actual chorus/refrain.\n\nTitle: ${title}\n\nLyrics:\n${sourceText}`
   let timeout: ReturnType<typeof setTimeout> | undefined
   try {
     const result = await Promise.race([ai.run('@cf/meta/llama-3.1-8b-instruct-fast', {
       messages: [
-        { role: 'system', content: 'You format hymn lyrics precisely and never invent text.' },
+        { role: 'system', content: 'You format hymn lyrics precisely and NEVER invent text.' },
         { role: 'user', content: prompt },
       ],
       max_tokens: 4096,
