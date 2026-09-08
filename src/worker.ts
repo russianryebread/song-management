@@ -1,6 +1,11 @@
 import { Hono } from "hono";
+import type { HTMLRewriter as WorkersHTMLRewriter } from "@cloudflare/workers-types";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { normalizeLyricsDraft, validateSectionedLyrics, type LyricSlide } from "./shared/lyrics";
+
+declare const HTMLRewriter: new () => Omit<WorkersHTMLRewriter, "transform"> & {
+  transform(response: Response): Response;
+};
 
 export type Bindings = {
   DB: D1Database;
@@ -15,7 +20,7 @@ type Variables = { userId: string };
 type App = Hono<{ Bindings: Bindings; Variables: Variables }>;
 type JsonRecord = Record<string, unknown>;
 type AiBinding = { run(model: string, inputs: Record<string, unknown>): Promise<unknown> };
-type TrustedSource = { id: string; name: string; base_url: string; enabled: number };
+type TrustedSource = { id: string; name: string; base_url: string; enabled: number; lyrics_selector: string };
 type PresenterFont = "libre-baskerville" | "inter" | "raleway";
 type AppSettings = {
   group_name: string;
@@ -235,9 +240,83 @@ function textAroundLyricStart(html: string): string {
 
 async function trustedSources(db: D1Database, includeDisabled = false): Promise<TrustedSource[]> {
   const query = includeDisabled
-    ? "SELECT id, name, base_url, enabled FROM trusted_sources ORDER BY name"
-    : "SELECT id, name, base_url, enabled FROM trusted_sources WHERE enabled = 1 ORDER BY name";
+    ? "SELECT id, name, base_url, enabled, lyrics_selector FROM trusted_sources ORDER BY name"
+    : "SELECT id, name, base_url, enabled, lyrics_selector FROM trusted_sources WHERE enabled = 1 ORDER BY name";
   return (await db.prepare(query).all<TrustedSource>()).results;
+}
+
+async function validLyricsSelector(selector: string): Promise<boolean> {
+  if (!selector) return true;
+  try {
+    const rewriter = new HTMLRewriter();
+    rewriter.on(selector, {});
+    await rewriter.transform(new Response("<div></div>")).text();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function hymnTextFromHtml(html: string, selector: string): Promise<string> {
+  if (!selector) return textAroundLyricStart(html);
+
+  let insideHymn = false;
+  let found = false;
+  let ignoredDepth = 0;
+  let text = "";
+  const rewriter = new HTMLRewriter();
+  // Register descendant handling first so it cannot replace the root's end handler.
+  rewriter.on("*", {
+    element(element) {
+      if (!insideHymn) return;
+      if (/^(script|style|noscript|template|button|nav|aside)$/i.test(element.tagName) ||
+          element.hasAttribute("hidden") || element.getAttribute("aria-hidden") === "true") {
+        // Void elements have no closing tag and cannot contain text.
+        if (!/^(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)$/i.test(element.tagName)) {
+          ignoredDepth++;
+          element.onEndTag(() => { ignoredDepth--; });
+        }
+        return;
+      }
+      if (ignoredDepth) return;
+      if (/^(br|p|div|section|article|li|tr|h[1-6]|pre|blockquote|hr)$/i.test(element.tagName)) {
+        text += "\n";
+        if (!/^(br|hr)$/i.test(element.tagName)) {
+          element.onEndTag(() => { if (insideHymn) text += "\n"; });
+        }
+      } else if (/^(td|th)$/i.test(element.tagName)) {
+        text += " ";
+        element.onEndTag(() => { if (insideHymn) text += " "; });
+      }
+    },
+  });
+  // Read only the first matching container, including nested elements.
+  rewriter.on(selector, {
+    element(element) {
+      if (found) return;
+      found = true;
+      insideHymn = true;
+      element.onEndTag(() => { insideHymn = false; });
+    },
+  });
+  rewriter.onDocument({
+    text(chunk) {
+      if (insideHymn && !ignoredDepth) text += chunk.text;
+    },
+  });
+  // Consume the bounded page so all streaming parser callbacks run.
+  await rewriter.transform(new Response(html)).text();
+  if (!found) throw new Error("The hymn text could not be found on this page. Paste its lyrics into the editor instead.");
+  return stripHtml(text)
+    .replace(/&#(x[\da-f]+|\d+);/gi, (_, code: string) => {
+      const value = code[0].toLowerCase() === "x" ? parseInt(code.slice(1), 16) : parseInt(code, 10);
+      return value > 0 && value <= 0x10ffff ? String.fromCodePoint(value) : "";
+    })
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 18_000);
 }
 
 export async function fetchTrustedText(url: string, sources: TrustedSource[]): Promise<string> {
@@ -284,7 +363,8 @@ export async function fetchTrustedText(url: string, sources: TrustedSource[]): P
     } finally {
       reader.releaseLock();
     }
-    const text = /html/i.test(type) ? textAroundLyricStart(body) : body.trim();
+    const source = sources.find((source) => source.enabled && normalizedHost(source.base_url) === normalizedHost(url));
+    const text = /html/i.test(type) ? await hymnTextFromHtml(body, source?.lyrics_selector ?? "") : body.trim();
     if (text.length < 20) throw new Error("No usable lyric text was found on that page.");
     return text;
   }
@@ -828,6 +908,7 @@ app.get("/api/trusted-sources", async (c) => {
       id: source.id,
       name: source.name,
       baseUrl: source.base_url,
+      lyricsSelector: source.lyrics_selector,
       enabled: Boolean(source.enabled),
     })),
   });
@@ -837,6 +918,8 @@ app.post("/api/trusted-sources", async (c) => {
   const body = await readJson(c);
   const name = stringField(body?.name, "name", { required: true, max: 100 });
   const rawUrl = stringField(body?.baseUrl, "baseUrl", { required: true, max: 2_000 });
+  const lyricsSelector = stringField(body?.lyricsSelector, "lyricsSelector", { max: 500 });
+  if (lyricsSelector === null || !(await validLyricsSelector(lyricsSelector))) return jsonError(c, "Enter a valid lyrics CSS selector, or leave it blank for automatic extraction.");
   if (!name || !rawUrl) return jsonError(c, "A source name and HTTPS URL are required.");
   let parsed: URL;
   try {
@@ -845,13 +928,13 @@ app.post("/api/trusted-sources", async (c) => {
     return jsonError(c, "Enter a valid HTTPS URL.");
   }
   if (parsed.protocol !== "https:" || !parsed.hostname) return jsonError(c, "Trusted sources must use HTTPS.");
-  const source = { id: id(), name, baseUrl: `${parsed.origin}/`, enabled: true };
+  const source = { id: id(), name, baseUrl: `${parsed.origin}/`, enabled: true, lyricsSelector };
   const now = new Date().toISOString();
   try {
     await c.env.DB.prepare(
-      "INSERT INTO trusted_sources (id, name, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)",
+      "INSERT INTO trusted_sources (id, name, base_url, lyrics_selector, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
     )
-      .bind(source.id, source.name, source.baseUrl, now, now)
+      .bind(source.id, source.name, source.baseUrl, lyricsSelector, now, now)
       .run();
   } catch {
     return jsonError(c, "That trusted source URL already exists.", 409);
@@ -867,6 +950,10 @@ app.patch("/api/trusted-sources/:id", async (c) => {
   const body = await readJson(c);
   const name = body?.name === undefined ? source.name : stringField(body.name, "name", { required: true, max: 100 });
   const enabled = body?.enabled === undefined ? Boolean(source.enabled) : body.enabled;
+  const lyricsSelector = body?.lyricsSelector === undefined
+    ? source.lyrics_selector
+    : stringField(body.lyricsSelector, "lyricsSelector", { max: 500 });
+  if (lyricsSelector === null || !(await validLyricsSelector(lyricsSelector))) return jsonError(c, "Enter a valid lyrics CSS selector, or leave it blank for automatic extraction.");
   const rawUrl =
     body?.baseUrl === undefined
       ? source.base_url
@@ -882,14 +969,14 @@ app.patch("/api/trusted-sources/:id", async (c) => {
   const baseUrl = `${parsed.origin}/`;
   try {
     await c.env.DB.prepare(
-      "UPDATE trusted_sources SET name = ?, base_url = ?, enabled = ?, updated_at = ? WHERE id = ?",
+      "UPDATE trusted_sources SET name = ?, base_url = ?, lyrics_selector = ?, enabled = ?, updated_at = ? WHERE id = ?",
     )
-      .bind(name, baseUrl, enabled ? 1 : 0, new Date().toISOString(), source.id)
+      .bind(name, baseUrl, lyricsSelector, enabled ? 1 : 0, new Date().toISOString(), source.id)
       .run();
   } catch {
     return jsonError(c, "That trusted source URL already exists.", 409);
   }
-  return c.json({ source: { id: source.id, name, baseUrl, enabled } });
+  return c.json({ source: { id: source.id, name, baseUrl, enabled, lyricsSelector } });
 });
 
 app.delete("/api/trusted-sources/:id", async (c) => {

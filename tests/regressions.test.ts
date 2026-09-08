@@ -107,7 +107,7 @@ test('lookup checks redirects before fetching a disallowed destination', async (
   let calls = 0
   globalThis.fetch = async () => { calls++; return new Response(null, { status: 302, headers: { location: 'https://unapproved.example/lyrics' } }) }
   try {
-    await assert.rejects(fetchTrustedText('https://hymnary.org/text/example', [{ id: 'h', name: 'Hymnary', base_url: 'https://hymnary.org', enabled: 1 }]), /not enabled/)
+    await assert.rejects(fetchTrustedText('https://hymnary.org/text/example', [{ id: 'h', name: 'Hymnary', base_url: 'https://hymnary.org', enabled: 1, lyrics_selector: '#at_fulltext' }]), /not enabled/)
     assert.equal(calls, 1)
   } finally { globalThis.fetch = original }
 })

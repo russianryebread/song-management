@@ -55,7 +55,7 @@ const activeMeeting = ref<Meeting | null>(null);
 const editingMeetingSlides = ref(false);
 const isBusy = ref(false);
 const trustedSources = ref<TrustedSource[]>([]);
-const newTrustedSource = ref({ name: "", baseUrl: "" });
+const newTrustedSource = ref({ name: "", baseUrl: "", lyricsSelector: "" });
 const settings = ref<AppSettings>({
     groupName: "Men’s group",
     defaultTextScale: 1,
@@ -422,7 +422,7 @@ async function addTrustedSource() {
             body: JSON.stringify(newTrustedSource.value),
         });
         trustedSources.value.push(result.source);
-        newTrustedSource.value = { name: "", baseUrl: "" };
+        newTrustedSource.value = { name: "", baseUrl: "", lyricsSelector: "" };
         notice.value = "Trusted source added.";
     } catch (caught) {
         error.value = (caught as Error).message;
@@ -445,7 +445,7 @@ async function saveTrustedSource(source: TrustedSource) {
     try {
         const result = await api<{ source: TrustedSource }>(`/api/trusted-sources/${source.id}`, {
             method: "PATCH",
-            body: JSON.stringify({ name: source.name, baseUrl: source.baseUrl, enabled: source.enabled }),
+            body: JSON.stringify({ name: source.name, baseUrl: source.baseUrl, enabled: source.enabled, lyricsSelector: source.lyricsSelector }),
         });
         trustedSources.value = trustedSources.value.map((item) => (item.id === source.id ? result.source : item));
         notice.value = "Trusted source updated.";
@@ -1132,6 +1132,7 @@ onBeforeUnmount(() => {
                         </div>
                     </div>
                     <p class="muted">Only page URLs from enabled sources can be fetched and auto-formatted.</p>
+                    <p class="muted" id="lyrics-selector-help">Set a lyrics CSS selector such as #at_fulltext or .hymn-content to import only that part of the page. Leave it blank for automatic extraction. If a selector does not match, lookup will ask you to paste the lyrics.</p>
                     <ul class="trusted-source-list">
                         <li v-for="source in trustedSources" :key="source.id">
                             <div class="trusted-source-fields">
@@ -1143,6 +1144,15 @@ onBeforeUnmount(() => {
                                     v-model="source.baseUrl"
                                     type="url"
                                     aria-label="Source URL"
+                                    @change="saveTrustedSource(source)"
+                                />
+                                <input
+                                    v-model="source.lyricsSelector"
+                                    class="lyrics-selector-input"
+                                    aria-label="Lyrics CSS selector"
+                                    aria-describedby="lyrics-selector-help"
+                                    placeholder="Lyrics CSS selector (optional)"
+                                    maxlength="500"
                                     @change="saveTrustedSource(source)"
                                 />
                             </div>
@@ -1163,6 +1173,12 @@ onBeforeUnmount(() => {
                             v-model="newTrustedSource.baseUrl"
                             type="url"
                             placeholder="https://example.org/"
+                        /><input
+                            v-model="newTrustedSource.lyricsSelector"
+                            aria-label="Lyrics CSS selector for new source"
+                            aria-describedby="lyrics-selector-help"
+                            placeholder="Lyrics CSS selector (optional)"
+                            maxlength="500"
                         /><button class="secondary-button">Add source</button>
                     </form>
                 </section>

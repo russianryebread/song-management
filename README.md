@@ -32,6 +32,11 @@ return to the intended record after sign-in.
 Settings includes an editable **Allowed lookup sites** list. It begins with
 `https://hymnary.org/` and `https://hymnal.net/`; add, edit, disable, or remove
 sites there. The checkbox explicitly shows whether each site is enabled for lookup.
+Each site has an optional **Lyrics CSS selector** (for example, `#at_fulltext`,
+`.hymn-main-card`, or `.hymn-content`). When configured, lookup imports only the
+first matching container and reports an error if it is missing or empty. Leave
+the selector blank to use automatic extraction. Migration `0006` fills in the
+known selectors for existing Hymnary, Hymnal Library, and Hymnal.net entries.
 To import lyrics, enter the specific trusted page in a saved song’s **Source URL**,
 choose **Find lyrics**, then **Use** the result. URL edits apply immediately, without
 saving first. Lookup imports a direct page; it does not search entire websites. The imported text

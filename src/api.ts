@@ -64,6 +64,7 @@ export type TrustedSource = {
   id: string
   name: string
   baseUrl: string
+  lyricsSelector: string
   enabled: boolean
 }
 
