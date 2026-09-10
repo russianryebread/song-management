@@ -1,3 +1,6 @@
 # Supply these before production deployment with `wrangler secret put`.
 ADMIN_PASSWORD=change-me
 SESSION_SECRET=generate-a-long-random-value
+
+# Optional: use Brave instead of the built-in, account-free site searches.
+BRAVE_SEARCH_API_KEY=

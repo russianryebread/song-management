@@ -1,3 +1,4 @@
+import { searchCandidates, directSearchUrl, directSearchResults } from "./shared/lyric-search";
 import { parseAliases, indexKey } from "./shared/song-index";
 import { Hono } from "hono";
 import type { HTMLRewriter as WorkersHTMLRewriter } from "@cloudflare/workers-types";
@@ -11,6 +12,7 @@ declare const HTMLRewriter: new () => Omit<WorkersHTMLRewriter, "transform"> & {
 export type Bindings = {
   DB: D1Database;
   ASSETS?: { fetch(request: Request | string): Promise<Response> };
+  BRAVE_SEARCH_API_KEY?: string;
   ADMIN_PASSWORD?: string;
   ADMIN_EMAIL?: string;
   SESSION_DAYS?: string;
@@ -38,7 +40,7 @@ const day = 86_400_000;
 // Cloudflare Workers currently caps PBKDF2 at 100,000 iterations.
 const passwordIterations = 100_000;
 
-function jsonError(c: any, message: string, status: 400 | 401 | 404 | 409 | 422 | 501 = 400) {
+function jsonError(c: any, message: string, status: 400 | 401 | 404 | 409 | 422 | 501 | 503 = 400) {
   return c.json({ error: message }, status);
 }
 
@@ -329,7 +331,7 @@ async function hymnTextFromHtml(html: string, selector: string): Promise<string>
     .slice(0, 18_000);
 }
 
-export async function fetchTrustedText(url: string, sources: TrustedSource[]): Promise<string> {
+export async function fetchTrustedText(url: string, sources: TrustedSource[], rawHtml = false): Promise<string> {
   for (let redirect = 0; redirect <= 5; redirect++) {
     if (!isTrustedUrl(url, sources)) throw new Error("That URL is not enabled in Allowed lookup sites in Settings.");
     const response = await fetch(url, {
@@ -373,6 +375,7 @@ export async function fetchTrustedText(url: string, sources: TrustedSource[]): P
     } finally {
       reader.releaseLock();
     }
+    if (rawHtml) return body;
     const source = sources.find((source) => source.enabled && normalizedHost(source.base_url) === normalizedHost(url));
     const text = /html/i.test(type) ? await hymnTextFromHtml(body, source?.lyrics_selector ?? "") : body.trim();
     if (text.length < 20) throw new Error("No usable lyric text was found on that page.");
@@ -1043,34 +1046,53 @@ app.on("POST", ["/api/format-text", "/api/songs/:id/format-text"], async (c) => 
   });
 });
 
-app.post("/api/songs/:id/find-lyrics", async (c) => {
-  const song = await songById(c.env.DB, c.req.param("id"));
-  if (!song) return jsonError(c, "Song not found.", 404);
-  const sources = await trustedSources(c.env.DB);
+app.on("POST", ["/api/find-lyrics", "/api/songs/:id/find-lyrics"], async (c) => {
   const body = await readJson(c);
-  const sourceUrl = stringField(body?.sourceUrl ?? song.source_url, "sourceUrl", { max: 2_000 });
+  const songId = c.req.param("id");
+  const song = songId ? await songById(c.env.DB, songId) : null;
+  if (songId && !song) return jsonError(c, "Song not found.", 404);
+  const title = stringField(body?.title ?? song?.title, "title", { required: true, max: 300 });
+  if (!title) return jsonError(c, "Enter a song title first.");
+  const sources = await trustedSources(c.env.DB);
+  const sourceUrl = stringField(body?.sourceUrl ?? song?.source_url, "sourceUrl", { max: 2_000 });
   if (sourceUrl === null) return jsonError(c, "Source URL is invalid.");
-  const source = sources.find((item) => normalizedHost(item.base_url) === normalizedHost(sourceUrl));
-  const candidates =
-    source && isTrustedUrl(sourceUrl, sources)
-      ? [{ id: sourceUrl, title: song.title, sourceName: source.name, sourceUrl, available: true }]
-      : [];
-  return c.json({
-    candidates,
-    message: candidates.length
-      ? "Choose the source to import a reviewable lyric draft."
-      : !sources.length
-        ? "No lookup sites are enabled. Enable a site in Settings."
-        : sourceUrl
-          ? "This page’s domain is not enabled for lookup. Check Allowed lookup sites in Settings."
-          : "Enter a direct song page URL from an enabled site in Settings. Enabling a site permits imports; it does not automatically locate a song page.",
-  });
+  if (sourceUrl) {
+    const source = sources.find(item => normalizedHost(item.base_url) === normalizedHost(sourceUrl));
+    if (!source || !isTrustedUrl(sourceUrl, sources)) return jsonError(c, "That URL is not enabled in Allowed lookup sites in Settings.");
+    return c.json({ candidates: [{ id: sourceUrl, title, sourceName: source.name, sourceUrl, available: true }], autoSelect: true });
+  }
+  if (!sources.length) return c.json({ candidates: [], message: "No lookup sites are enabled. Enable a site in Settings." });
+  const candidates: ReturnType<typeof searchCandidates> = [];
+  const failures: string[] = [];
+  // Search every enabled site, sequentially to avoid a burst against provider quotas.
+  for (const source of sources) {
+    try {
+      if (!c.env.BRAVE_SEARCH_API_KEY) {
+        const searchUrl = directSearchUrl(title, source);
+        if (!searchUrl) { failures.push(`${source.name} (direct search not supported yet)`); continue; }
+        const html = await fetchTrustedText(searchUrl, sources, true);
+        candidates.push(...searchCandidates(title, directSearchResults(html, searchUrl), source));
+        continue;
+      }
+      const url = new URL("https://api.search.brave.com/res/v1/web/search");
+      url.searchParams.set("q", `site:${normalizedHost(source.base_url)} "${title.replace(/"/g, " ")}" lyrics`);
+      url.searchParams.set("count", "10");
+      const response = await fetch(url, { headers: { Accept: "application/json", "X-Subscription-Token": c.env.BRAVE_SEARCH_API_KEY }, signal: AbortSignal.timeout(12_000), redirect: "error" });
+      if (!response.ok) { await response.body?.cancel(); throw new Error("Search unavailable"); }
+      const data = await response.json() as { web?: { results?: Array<{ title: string; url: string }> } };
+      candidates.push(...searchCandidates(title, (data.web?.results ?? []).filter(item => typeof item.title === "string" && typeof item.url === "string"), source));
+    } catch { failures.push(source.name); }
+  }
+  const unique = [...new Map(candidates.sort((a, b) => b.score - a.score).map(item => [item.id, item])).values()];
+  return c.json({ candidates: unique, autoSelect: !failures.length && unique.length === 1 && unique[0].exact,
+    message: failures.length ? `Search unavailable for: ${failures.join(", ")}. Try again or paste a direct URL.` : unique.length ? "Choose a matching song to import its lyrics." : "No matching lyrics found. Try another title or paste a direct source URL." });
 });
 
-app.post("/api/songs/:id/use-lyric-candidate", async (c) => {
-  const song = await songById(c.env.DB, c.req.param("id"));
-  if (!song) return jsonError(c, "Song not found.", 404);
+app.on("POST", ["/api/use-lyric-candidate", "/api/songs/:id/use-lyric-candidate"], async (c) => {
   const body = await readJson(c);
+  const songId = c.req.param("id");
+  const song = songId ? await songById(c.env.DB, songId) : { title: stringField(body?.title, "title", { max: 300 }) || "Untitled song" };
+  if (!song) return jsonError(c, "Song not found.", 404);
   const sourceUrl = stringField(body?.sourceUrl ?? body?.candidateId, "sourceUrl", { required: true, max: 2_000 });
   if (!sourceUrl) return jsonError(c, "A trusted source URL is required.");
   try {
@@ -1082,7 +1104,7 @@ app.post("/api/songs/:id/use-lyric-candidate", async (c) => {
     return c.json({
       lyricsText,
       sourceUrl,
-      lyricsSourceName: "trusted import",
+      lyricsSourceName: (await trustedSources(c.env.DB)).find(source => normalizedHost(source.base_url) === normalizedHost(sourceUrl))?.name ?? "trusted import",
       slides: parsed.slides,
       requiresReview: true,
     });

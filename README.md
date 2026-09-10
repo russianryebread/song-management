@@ -37,10 +37,20 @@ Each site has an optional **Lyrics CSS selector** (for example, `#at_fulltext`,
 first matching container and reports an error if it is missing or empty. Leave
 the selector blank to use automatic extraction. Migration `0006` fills in the
 known selectors for existing Hymnary, Hymnal Library, and Hymnal.net entries.
-To import lyrics, enter the specific trusted page in a saved song’s **Source URL**,
-choose **Find lyrics**, then **Use** the result. URL edits apply immediately, without
-saving first. Lookup imports a direct page; it does not search entire websites. The imported text
-is only a draft: review it and save it before it becomes part of the library.
+Enter a song title and choose **Find lyrics**, including before saving a new song.
+Without an API key, the server searches Hymnal.net and Hymnary directly. Other
+enabled sites are reported as unsupported for direct search; direct URL import
+still works for them. The server keeps only results
+from those exact trusted domains. A sole exact title match imports automatically;
+other matches appear in a picker. Partial search failures are reported and prevent
+automatic selection. A direct **Source URL** bypasses search.
+
+Optionally configure `BRAVE_SEARCH_API_KEY` as a Worker secret (or in `.dev.vars`
+locally) to use web search across arbitrary trusted sites. No account or API key is
+required for the built-in direct searches. Sites may block automated requests;
+those failures are reported without discarding matches from other sites. Imported lyrics remain an editable draft until you save. Existing lyrics
+require confirmation before replacement, and edits made during a fetch are kept.
+The monospace editor highlights section headers and `|||` slide breaks.
 
 You can also paste lyrics directly and choose **Format with AI**. The deterministic
 fallback recognizes explicit numbered verses and section labels, preserves stanza

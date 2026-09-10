@@ -4,10 +4,11 @@ import { DatabaseSync } from 'node:sqlite'
 import { readFileSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import app, { onlyUsesSourceWords, formatLyricsWithAi, fetchTrustedText } from '../src/worker'
+import { directSearchUrl, directSearchResults, searchCandidates } from '../src/shared/lyric-search'
 import { indexKey, titleLetter } from '../src/shared/song-index'
 import { normalizeLyricsDraft, validateSectionedLyrics } from '../src/shared/lyrics'
 
-function fixture() {
+function fixture(bindings: Record<string, string> = {}) {
   const sqlite = new DatabaseSync(':memory:')
   for (const file of readdirSync('migrations').sort()) sqlite.exec(readFileSync(`migrations/${file}`, 'utf8'))
   sqlite.exec("INSERT INTO users VALUES ('admin', 'test@example.org', '', '2026-01-01')")
@@ -24,7 +25,7 @@ function fixture() {
     return statement
   }, async batch(statements: any[]) { return Promise.all(statements.map(s => s.run())) } }
   async function request(path: string, body?: object, method = body ? 'POST' : 'GET') {
-    const response = await app.request(`http://localhost${path}`, { method, headers: { Cookie: 'song_session=test', 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) }, { DB } as any)
+    const response = await app.request(`http://localhost${path}`, { method, headers: { Cookie: 'song_session=test', 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) }, { DB, ...bindings } as any)
     return { status: response.status, body: await response.json() as any }
   }
   return { sqlite, request }
@@ -66,9 +67,8 @@ test('lookup accepts the unsaved editor URL and explains missing or disabled sou
     const result = await request('/api/songs/song-269/find-lyrics', { sourceUrl: 'https://www.hymnary.org/text/example' })
     assert.equal(result.body.candidates.length, 1)
     assert.equal(result.body.candidates[0].sourceUrl, 'https://www.hymnary.org/text/example')
-    assert.match((await request('/api/songs/song-269/find-lyrics', {})).body.message, /direct song page/)
     sqlite.exec('UPDATE trusted_sources SET enabled = 0')
-    assert.match((await request('/api/songs/song-269/find-lyrics', { sourceUrl: 'https://hymnary.org/text/example' })).body.message, /No lookup sites are enabled/)
+    assert.match((await request('/api/songs/song-269/find-lyrics', { sourceUrl: 'https://hymnary.org/text/example' })).body.error, /not enabled/)
   } finally { sqlite.close() }
 })
 
@@ -173,4 +173,72 @@ test('alphabet grouping ignores leading punctuation and accents without discardi
   assert.equal(titleLetter('Привет'), '…')
   assert.equal(titleLetter(''), '…')
   assert.equal(indexKey('  “Ámen'), 'amen')
+})
+
+
+test('title lookup searches all trusted sites, filters outsiders, handles partial failure and unsaved songs', async () => {
+  const { sqlite, request } = fixture({ BRAVE_SEARCH_API_KEY: 'test-key' })
+  const original = globalThis.fetch
+  const queried: string[] = []
+  let fail = false
+  globalThis.fetch = async (input) => {
+    const query = new URL(String(input)).searchParams.get('q')!
+    queried.push(query)
+    if (query.includes('hymnal.net')) {
+      if (fail) return new Response('', { status: 429 })
+      return Response.json({ web: { results: [] } })
+    }
+    return Response.json({ web: { results: [
+      { title: 'Amazing Grace - Hymnary.org', url: 'https://hymnary.org/text/grace' },
+      { title: 'Amazing Grace', url: 'https://untrusted.example/grace' },
+      { title: 'Amazing Grace', url: 'https://hymnary.org/text/grace#lyrics' },
+      { title: 'Different song', url: 'https://hymnary.org/text/other' },
+    ] } })
+  }
+  try {
+    const result = await request('/api/find-lyrics', { title: 'Amazing Grace' })
+    assert.equal(result.status, 200)
+    assert.equal(queried.length, 2)
+    assert.equal(result.body.candidates.length, 1)
+    assert.equal(result.body.autoSelect, true)
+    fail = true
+    const partial = await request('/api/find-lyrics', { title: 'Amazing Grace' })
+    assert.equal(partial.body.autoSelect, false)
+    assert.match(partial.body.message, /unavailable/)
+    assert.equal((await request('/api/find-lyrics', { title: '' })).status, 400)
+    const direct = await request('/api/find-lyrics', { title: 'New song', sourceUrl: 'https://hymnary.org/text/grace' })
+    assert.equal(direct.body.autoSelect, true)
+    globalThis.fetch = async () => new Response('1. First lyric line here\nSecond lyric line here', { headers: { 'Content-Type': 'text/plain' } })
+    const imported = await request('/api/use-lyric-candidate', { title: 'New song', sourceUrl: 'https://hymnary.org/text/grace' })
+    assert.equal(imported.status, 200)
+    assert.match(imported.body.lyricsText, /\[verse 1\]/)
+    assert.equal(imported.body.lyricsSourceName, 'Hymnary')
+    assert.equal((sqlite.prepare('SELECT count(*) AS n FROM songs').get() as any).n, 270)
+  } finally { globalThis.fetch = original; sqlite.close() }
+})
+
+
+test('key-free title search extracts direct results and keeps matches when another site is blocked', async () => {
+  const { sqlite, request } = fixture()
+  const original = globalThis.fetch
+  const calls: string[] = []
+  globalThis.fetch = async input => {
+    const url = String(input); calls.push(url)
+    return new Response(url.includes('hymnary.org') ? '<div class="bunny-shield">Browser check</div>' :
+      '<a class="list-group-item" href="/en/hymn/h/313"><span class="label label-info">E313</span>Amazing Grace<span class="label label-default">Classic</span></a>',
+      { headers: { 'Content-Type': 'text/html' } })
+  }
+  try {
+    const result = await request('/api/find-lyrics', { title: 'Amazing Grace' })
+    assert.equal(result.status, 200)
+    assert.equal(calls.length, 2)
+    assert.ok(calls.every(url => !url.includes('brave')))
+    assert.equal(result.body.candidates[0].title, 'Amazing Grace')
+    assert.equal(result.body.candidates[0].sourceUrl, 'https://www.hymnal.net/en/hymn/h/313')
+    assert.equal(result.body.autoSelect, false)
+    assert.match(result.body.message, /Hymnary/)
+    const source = { name: 'Custom', base_url: 'https://custom.example', enabled: 1 }
+    assert.equal(directSearchUrl('Amazing Grace', source), null)
+    assert.deepEqual(searchCandidates('Amazing Grace', directSearchResults('<a href="https://evil.example/text/x">Amazing Grace</a>', source.base_url), source), [])
+  } finally { globalThis.fetch = original; sqlite.close() }
 })

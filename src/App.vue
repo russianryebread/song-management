@@ -26,6 +26,7 @@ import AppSidebar from "./components/AppSidebar.vue";
 import PresenterView from "./components/PresenterView.vue";
 import SettingsView from "./components/SettingsView.vue";
 import SongBrowser from "./components/SongBrowser.vue";
+import LyricsEditor from "./components/LyricsEditor.vue";
 import ToastStack from "./components/ToastStack.vue";
 
 type Page = "dashboard" | "library" | "meetings" | "settings";
@@ -309,14 +310,15 @@ async function importOpenLyrics(event: Event) {
 
 async function findLyrics() {
     const song = editingSong.value;
-    if (!song?.id) {
-        notice.value = "Save the song first, then find lyrics.";
+    if (!song?.title.trim()) {
+        notice.value = "Enter a title first, then find lyrics.";
         return;
     }
+    lyricCandidates.value = [];
     isBusy.value = true;
     try {
         const response = await api<LyricCandidate[] | { candidates: LyricCandidate[]; message?: string }>(
-            `/api/songs/${song.id}/find-lyrics`,
+            song.id ? `/api/songs/${song.id}/find-lyrics` : "/api/find-lyrics",
             {
                 method: "POST",
                 body: JSON.stringify({
@@ -328,11 +330,14 @@ async function findLyrics() {
         );
         if (editingSong.value !== song) return;
         lyricCandidates.value = Array.isArray(response) ? response : response.candidates;
+        if (!Array.isArray(response) && response.message) notice.value = response.message;
         if (!lyricCandidates.value.length)
             notice.value =
                 !Array.isArray(response) && response.message
                     ? response.message
-                    : "Enter a direct song page URL from an enabled site in Settings.";
+                    : "No matching lyrics found. Try another title or paste a direct source URL.";
+        if (lyricCandidates.value.length === 1 && !Array.isArray(response) && (response as { autoSelect?: boolean }).autoSelect)
+            await useCandidate(lyricCandidates.value[0]);
     } catch (caught) {
         error.value = (caught as Error).message;
     } finally {
@@ -343,18 +348,26 @@ async function findLyrics() {
 async function useCandidate(candidate: LyricCandidate) {
     const song = editingSong.value;
     if (!song) return;
+    const originalLyrics = currentLyrics.value;
+    if (originalLyrics.trim() && !confirm("Replace the lyrics currently in the editor?")) return;
     isBusy.value = true;
     try {
         const result = await api<{ lyricsText: string; sourceUrl: string; lyricsSourceName: string }>(
-            `/api/songs/${song.id}/use-lyric-candidate`,
+            song.id ? `/api/songs/${song.id}/use-lyric-candidate` : "/api/use-lyric-candidate",
             {
                 method: "POST",
                 body: JSON.stringify({
+                    title: song.title,
                     sourceUrl: candidate.sourceUrl ?? candidate.source_url ?? candidate.url ?? candidate.id,
                 }),
             },
         );
         if (editingSong.value !== song) return;
+        if (currentLyrics.value !== originalLyrics) {
+            notice.value = "Lyrics changed during lookup. Your latest edits were kept.";
+            return;
+        }
+        lyricCandidates.value = [];
         formatUndo.value = currentLyrics.value;
         editingSong.value = {
             ...song,
@@ -867,14 +880,13 @@ onBeforeUnmount(() => {
                                 placeholder="Direct song page, e.g. https://hymnary.org/..."
                         /></label>
                         <p class="field-help">
-                            For lookup, paste a direct song page from an enabled site in Settings, then choose
-                            <strong>Find lyrics</strong>.
+                            <strong>Find lyrics</strong> searches all enabled sites by title. Optionally paste a direct song page URL to import that page.
                         </p>
                         <div class="editor-actions">
                             <button
                                 type="button"
                                 class="secondary-button"
-                                :disabled="isBusy || !editingSong.id"
+                                :disabled="isBusy || !editingSong.title.trim()"
                                 @click="findLyrics"
                             >
                                 Find lyrics</button
@@ -917,7 +929,7 @@ onBeforeUnmount(() => {
                                 <button
                                     type="button"
                                     class="text-button"
-                                    :disabled="candidate.available === false || !candidate.id"
+                                    :disabled="isBusy || candidate.available === false || !candidate.id"
                                     @click="useCandidate(candidate)"
                                 >
                                     Use
@@ -926,13 +938,7 @@ onBeforeUnmount(() => {
                         </div>
                         <label
                             >Lyrics
-                            <textarea
-                                v-model="currentLyrics"
-                                rows="20"
-                                spellcheck="true"
-                                @input="updatePreview"
-                                placeholder="[verse 1]\nOne displayed line per row\n|||\nA forced new slide"
-                            ></textarea>
+                            <LyricsEditor v-model="currentLyrics" @update:model-value="updatePreview" />
                         </label>
                         <p class="field-help">
                             Use <code>[verse 1]</code> or <code>[chorus]</code> for a section. A standalone
