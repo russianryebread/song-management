@@ -296,6 +296,7 @@ textarea {
     margin-top: auto;
 }
 .workspace {
+    min-width: 0;
     max-width: 85rem;
     padding: clamp(1.25rem, 4vw, 3.25rem);
     width: 100%;
@@ -1001,3 +1002,7 @@ td strong {
         opacity: 0.85;
     }
 }
+
+.alias-editor { border: 1px solid #e3e6df; border-radius: .5rem; margin: 0 0 1rem; padding: .75rem; min-width: 0; }
+.alias-editor legend { font-weight: 600; font-size: .9rem; padding: 0 .25rem; }
+.alias-editor .form-row { align-items: end; margin-bottom: .75rem; }

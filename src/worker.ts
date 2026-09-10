@@ -1,3 +1,4 @@
+import { parseAliases, indexKey } from "./shared/song-index";
 import { Hono } from "hono";
 import type { HTMLRewriter as WorkersHTMLRewriter } from "@cloudflare/workers-types";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
@@ -127,11 +128,20 @@ async function requireAuth(c: any, next: () => Promise<void>) {
   await next();
 }
 
+const aliasSelect = `(SELECT COALESCE(json_group_array(json_object('title', alias, 'kind', kind)), '[]') FROM (SELECT alias, kind FROM song_aliases WHERE song_id = s.id ORDER BY position, created_at, id)) AS aliases_json`;
+function aliasStatements(db: D1Database, songId: string, aliases: NonNullable<ReturnType<typeof parseAliases>>) {
+  return [db.prepare("DELETE FROM song_aliases WHERE song_id = ?").bind(songId), ...aliases.map((alias, position) =>
+    db.prepare("INSERT INTO song_aliases (id, song_id, alias, normalized_alias, kind, created_at, position) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .bind(id(), songId, alias.title, indexKey(alias.title), alias.kind, new Date().toISOString(), position))];
+}
+
 function serializeSong(row: any) {
   return {
     id: row.id,
     hymnNumber: row.hymn_number,
     title: row.title,
+    aliases: JSON.parse(row.aliases_json ?? "[]"),
+    hasLyrics: Boolean(row.has_lyrics ?? (row.lyrics_text ?? "").trim()),
     sourceUrl: row.source_url,
     lyricsSourceName: row.lyrics_source_name,
     lyricsFormat: row.lyrics_format,
@@ -442,7 +452,7 @@ async function insertSlides(db: D1Database, meetingSongId: string, slides: Lyric
 async function songById(db: D1Database, songId: string) {
   return db
     .prepare(
-      `SELECT s.*, COUNT(ms.id) AS use_count, MAX(m.meeting_date) AS last_used_at
+      `SELECT s.*, ${aliasSelect}, COUNT(ms.id) AS use_count, MAX(m.meeting_date) AS last_used_at
      FROM songs s
      LEFT JOIN meeting_songs ms ON ms.song_id = s.id
      LEFT JOIN meetings m ON m.id = ms.meeting_id
@@ -714,7 +724,7 @@ app.get("/api/songs", async (c) => {
   const terms = q.split(/\s+/).filter(Boolean);
   const conditions = terms.map(
     () =>
-      "(s.title LIKE ? ESCAPE '\\' OR s.normalized_title LIKE ? ESCAPE '\\' OR s.hymn_number LIKE ? ESCAPE '\\' OR s.lyrics_text LIKE ? ESCAPE '\\')",
+      "(s.title LIKE ? ESCAPE '\\' OR s.normalized_title LIKE ? ESCAPE '\\' OR s.hymn_number LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM song_aliases a WHERE a.song_id = s.id AND (a.alias LIKE ? ESCAPE '\\' OR a.normalized_alias LIKE ? ESCAPE '\\')) OR s.lyrics_text LIKE ? ESCAPE '\\')",
   );
   if (lyrics === "ready") conditions.push("TRIM(COALESCE(s.lyrics_text, '')) != ''");
   if (lyrics === "missing") conditions.push("TRIM(COALESCE(s.lyrics_text, '')) = ''");
@@ -723,6 +733,8 @@ app.get("/api/songs", async (c) => {
     `%${escape(term)}%`,
     `%${escape(normalizeTitle(term) || term)}%`,
     `%${escape(term)}%`,
+    `%${escape(term)}%`,
+    `%${escape(indexKey(term) || term)}%`,
     `%${escape(term)}%`,
   ]);
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -734,6 +746,13 @@ app.get("/api/songs", async (c) => {
         : "";
   const base = `FROM songs s LEFT JOIN meeting_songs ms ON ms.song_id = s.id LEFT JOIN meetings m ON m.id = ms.meeting_id
     ${where} GROUP BY s.id ${having}`;
+  if (c.req.query("mode") === "index") {
+    const rows = await c.env.DB.prepare(`SELECT s.id, s.title, s.hymn_number, ${aliasSelect},
+      TRIM(COALESCE(s.lyrics_text, '')) != '' AS has_lyrics,
+      COUNT(ms.id) AS use_count, MAX(m.meeting_date) AS last_used_at ${base}`)
+      .bind(...bindings).all<any>();
+    return c.json({ songs: rows.results.map(serializeSong), total: rows.results.length });
+  }
   const count = await c.env.DB.prepare(`SELECT COUNT(*) AS total FROM (SELECT s.id ${base})`)
     .bind(...bindings)
     .first<{ total: number }>();
@@ -741,7 +760,7 @@ app.get("/api/songs", async (c) => {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const page = Math.min(totalPages, Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1);
   const rows = await c.env.DB.prepare(
-    `SELECT s.*, COUNT(ms.id) AS use_count, MAX(m.meeting_date) AS last_used_at ${base}
+    `SELECT s.*, ${aliasSelect}, COUNT(ms.id) AS use_count, MAX(m.meeting_date) AS last_used_at ${base}
     ORDER BY ${orders[sort] ?? orders.title}, s.title COLLATE NOCASE, s.id LIMIT ? OFFSET ?`,
   )
     .bind(...bindings, pageSize, (page - 1) * pageSize)
@@ -815,9 +834,11 @@ app.post("/api/songs", async (c) => {
     const validation = validateSectionedLyrics(lyricsText, title);
     if (validation.errors.length) return c.json({ error: "Lyrics are invalid.", details: validation.errors }, 422);
   }
+  const aliases = parseAliases(body?.aliases ?? []);
+  if (!aliases) return jsonError(c, "Provide up to 30 alternate titles with a valid type (300 characters each).");
   const songId = id();
   const now = new Date().toISOString();
-  await c.env.DB.prepare(
+  const statement = c.env.DB.prepare(
     `INSERT INTO songs (id, hymn_number, title, normalized_title, dedupe_key, source_url, lyrics_source_name, lyrics_format, lyrics_text, status, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, 'sectioned-v1', ?, 'active', ?, ?)`,
   )
@@ -832,8 +853,8 @@ app.post("/api/songs", async (c) => {
       lyricsText || "",
       now,
       now,
-    )
-    .run();
+    );
+  await c.env.DB.batch([statement, ...aliasStatements(c.env.DB, songId, aliases)]);
   return c.json({ song: serializeSong(await songById(c.env.DB, songId)) }, 201);
 });
 
@@ -847,12 +868,14 @@ app.patch("/api/songs/:id", async (c) => {
   if (!existing) return jsonError(c, "Song not found.", 404);
   const body = await readJson(c);
   if (!body) return jsonError(c, "Expected a JSON object.");
+  const aliases = body.aliases === undefined ? undefined : parseAliases(body.aliases);
+  if (aliases === null) return jsonError(c, "Provide up to 30 alternate titles with a valid type (300 characters each).");
   const title =
     body.title === undefined ? existing.title : stringField(body.title, "title", { required: true, max: 300 });
   const hymnNumber =
-    body.hymnNumber === undefined ? existing.hymn_number : stringField(body.hymnNumber, "hymnNumber", { max: 50 });
+    body.hymnNumber === undefined ? (existing.hymn_number ?? "") : stringField(body.hymnNumber, "hymnNumber", { max: 50 });
   const sourceUrl =
-    body.sourceUrl === undefined ? existing.source_url : stringField(body.sourceUrl, "sourceUrl", { max: 2_000 });
+    body.sourceUrl === undefined ? (existing.source_url ?? "") : stringField(body.sourceUrl, "sourceUrl", { max: 2_000 });
   const lyricsText =
     body.lyricsText === undefined ? existing.lyrics_text : stringField(body.lyricsText, "lyricsText", { max: 50_000 });
   if (!title || hymnNumber === null || sourceUrl === null || lyricsText === null)
@@ -861,7 +884,7 @@ app.patch("/api/songs/:id", async (c) => {
     const validation = validateSectionedLyrics(lyricsText, title);
     if (validation.errors.length) return c.json({ error: "Lyrics are invalid.", details: validation.errors }, 422);
   }
-  await c.env.DB.prepare(
+  const statement = c.env.DB.prepare(
     `UPDATE songs SET title = ?, hymn_number = ?, normalized_title = ?, dedupe_key = ?, source_url = ?, lyrics_source_name = ?, lyrics_format = 'sectioned-v1', lyrics_text = ?, updated_at = ? WHERE id = ?`,
   )
     .bind(
@@ -874,8 +897,8 @@ app.patch("/api/songs/:id", async (c) => {
       lyricsText || "",
       new Date().toISOString(),
       existing.id,
-    )
-    .run();
+    );
+  await c.env.DB.batch([statement, ...(aliases ? aliasStatements(c.env.DB, existing.id, aliases) : [])]);
   return c.json({ song: serializeSong(await songById(c.env.DB, existing.id)) });
 });
 

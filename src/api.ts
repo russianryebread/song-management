@@ -1,3 +1,4 @@
+import type { SongAlias } from "./shared/song-index"
 export type Slide = {
   id?: string
   kind: 'title' | 'lyrics'
@@ -8,6 +9,8 @@ export type Slide = {
 export type Song = {
   id: string
   title: string
+  aliases?: SongAlias[]
+  hasLyrics?: boolean
   hymnNumber?: string | null
   hymn_number?: string | null
   sourceUrl?: string | null
@@ -82,6 +85,7 @@ export type UserAccount = {
   createdAt: string
 }
 
+export type SongIndexResponse = { songs: Song[]; total: number }
 export type SongListResponse = { songs: Song[]; page: number; pageSize: number; total: number; totalPages: number }
 
 type ApiError = Error & { status?: number }

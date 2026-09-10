@@ -66,7 +66,7 @@ const settings = ref<AppSettings>({
 const users = ref<UserAccount[]>([]);
 let toastTimer: number | undefined;
 
-const emptySong = (): Song => ({ id: "", title: "", hymnNumber: "", sourceUrl: "", lyricsText: "" });
+const emptySong = (): Song => ({ id: "", title: "", aliases: [], hymnNumber: "", sourceUrl: "", lyricsText: "" });
 const upcomingMeeting = computed(() => meetings.value.find((meeting) => meeting.status === "draft") ?? null);
 const recentMeetings = computed(() =>
     [...meetings.value].sort((a, b) => meetingDate(b).localeCompare(meetingDate(a))).slice(0, 6),
@@ -231,7 +231,7 @@ function editSong(song?: Song, updateRoute = true) {
     formatUndo.value = null;
     lyricCandidates.value = [];
     editingSong.value = song
-        ? { ...song, lyricsText: songLyrics(song), sourceUrl: song.sourceUrl ?? song.source_url ?? "" }
+        ? { ...song, aliases: (song.aliases ?? []).map(alias => ({ ...alias })), lyricsText: songLyrics(song), sourceUrl: song.sourceUrl ?? song.source_url ?? "" }
         : emptySong();
     slidePreview.value = editingSong.value.title ? parseLyrics(editingSong.value.title, currentLyrics.value) : [];
     page.value = "library";
@@ -254,6 +254,7 @@ async function saveSong() {
             method: isNew ? "POST" : "PATCH",
             body: JSON.stringify({
                 title: song.title.trim(),
+                aliases: song.aliases ?? [],
                 hymnNumber: songNumber(song) || null,
                 sourceUrl: song.sourceUrl ?? song.source_url ?? null,
                 lyricsText: currentLyrics.value,
@@ -849,6 +850,15 @@ onBeforeUnmount(() => {
                             <label>Title <input id="song-title" v-model="editingSong.title" required /></label
                             ><label>Hymn number <input v-model="editingSong.hymnNumber" inputmode="numeric" /></label>
                         </div>
+                        <fieldset class="alias-editor">
+                            <legend>Other titles / first lines</legend>
+                            <div v-for="(alias, index) in editingSong.aliases" :key="index" class="form-row">
+                                <label>Title or first line <input v-model="alias.title" required maxlength="300" /></label>
+                                <label>Type <select v-model="alias.kind"><option value="alternate">Alternate title</option><option value="first-line">First line</option></select></label>
+                                <button type="button" class="text-button" :aria-label="`Remove alternate title ${index + 1}`" @click="editingSong.aliases?.splice(index, 1)">Remove</button>
+                            </div>
+                            <button type="button" class="text-button" :disabled="(editingSong.aliases?.length ?? 0) >= 30" @click="(editingSong.aliases ??= []).push({ title: '', kind: 'alternate' })">+ Add another title</button>
+                        </fieldset>
                         <label
                             >Source URL
                             <input

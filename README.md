@@ -49,8 +49,15 @@ word order and counts. If AI is unavailable or fails validation, the editor clea
 identifies basic formatting. Formatting also works before a new song is saved.
 The viewer always limits lyric slides to four lines.
 
-The library and meeting song picker share full-library search (title, number, and
-lyrics), independent usage/lyrics filters, sorting, previews, and pagination.
+The library and meeting song picker share full-library search (main and alternate
+titles, first lines, number, and lyrics), independent usage/lyrics filters, and previews.
+Title A–Z uses a horizontally scrollable alphabet strip and sticky section headings.
+Click a letter to jump; enable **Only show this letter** to filter. Alternate titles
+appear as cross-references to the same song; search returns each song once. The
+index loads without lyrics, which are fetched when opening or selecting a song.
+Other sorts retain numbered pagination. Edit alternate titles and first lines below
+the main title in the song editor. Apply migration `0007_alias_kind.sql` before
+running this version against an existing database.
 Meetings lists active meetings above history; `/history` redirects to `/meetings`.
 Usage counts include all linked meeting records, including drafts, consistently
 in the library and meeting details.
