@@ -53,7 +53,7 @@ function changeSlide(amount: number) {
   index.value = Math.min(Math.max(index.value + amount, 0), slides.value.length - 1)
 }
 function adjustTextSize(amount: number) {
-  textScale.value = Math.round(Math.min(1.35, Math.max(.75, textScale.value + amount)) * 100) / 100
+  textScale.value = Math.round(Math.min(1.35, Math.max(.60, textScale.value + amount)) * 100) / 100
 }
 async function toggleFullscreen() {
   try { if (document.fullscreenElement) await document.exitFullscreen(); else await document.documentElement.requestFullscreen() } catch { /* Browser may decline. */ }
@@ -100,7 +100,7 @@ watch([textScale, repeatChorus], () => localStorage.setItem(settingsKey, JSON.st
 onMounted(() => {
   try {
     const saved = JSON.parse(localStorage.getItem(settingsKey) ?? '{}') as { textScale?: number; repeatChorus?: boolean; }
-    if (typeof saved.textScale === 'number') textScale.value = Math.min(1.35, Math.max(.75, saved.textScale))
+    if (typeof saved.textScale === 'number') textScale.value = Math.min(1.35, Math.max(.60, saved.textScale))
     if (typeof saved.repeatChorus === 'boolean') repeatChorus.value = saved.repeatChorus
   } catch { /* Defaults remain usable. */ }
   window.addEventListener('keydown', keydown); void loadDeck()
