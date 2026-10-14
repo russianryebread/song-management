@@ -177,7 +177,7 @@ function makeSql(parsed, report) {
 
   for (const meeting of parsed.meetings) {
     const meetingId = stableId('meeting', meeting.date);
-    lines.push(`INSERT OR IGNORE INTO meetings (id, meeting_date, status, created_at, updated_at) VALUES (${sqlString(meetingId)}, ${sqlString(meeting.date)}, 'past', ${sqlString(createdAt)}, ${sqlString(createdAt)});`);
+    lines.push(`INSERT OR IGNORE INTO meetings (id, meeting_date, status, published_at, created_at, updated_at) VALUES (${sqlString(meetingId)}, ${sqlString(meeting.date)}, 'past', ${sqlString(createdAt)}, ${sqlString(createdAt)}, ${sqlString(createdAt)});`);
     meeting.songs.forEach((song, position) => {
       const dedupeKey = `${song.hymnNumber ?? 'none'}:${song.normalizedTitle}`;
       const meetingSongId = stableId('meeting-song', `${meeting.date}:${position}:${dedupeKey}`);

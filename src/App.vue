@@ -645,11 +645,12 @@ async function publishMeeting() {
     if (!activeMeeting.value) return;
     isBusy.value = true;
     try {
-        const result = await api<{ viewToken: string; presenterPath: string }>(
+        await api<{ viewToken: string; presenterPath: string }>(
             `/api/meetings/${activeMeeting.value.id}/publish`,
             { method: "POST" },
         );
-        activeMeeting.value = { ...activeMeeting.value, status: "published", viewToken: result.viewToken };
+        activeMeeting.value = await api<Meeting>(`/api/meetings/${activeMeeting.value.id}`);
+        await loadAppData();
         meetings.value = meetings.value.map((meeting) =>
             meeting.id === activeMeeting.value?.id ? activeMeeting.value! : meeting,
         );
@@ -1031,6 +1032,7 @@ onBeforeUnmount(() => {
                                 <span class="position">{{ index + 1 }}</span>
                                 <div>
                                     <strong>{{ song.title }}</strong
+                                    ><small v-if="songNumber(song)">[#{{ songNumber(song) }}]</small
                                     ><small>{{
                                         songUses(song)
                                             ? `Used ${songUses(song)}× · last ${displayDate(songLastUsed(song))}`
