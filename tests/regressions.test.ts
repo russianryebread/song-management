@@ -95,6 +95,19 @@ test('formatting preserves order, repeated words, non-Latin words, and explicit 
   assert.equal(await formatLyricsWithAi({ run: async () => { throw new Error('unavailable') } }, 'Title', source), null)
 })
 
+test('AI cleanup accepts lyrics without duplicate renderings, chords, or page controls', async () => {
+  const verse1 = 'More love to Thee, O Lord,\nMore love to Thee!\nHear Thou the prayer I make\nOn bended knee;\nThis is my earnest plea:\nMore love, O Lord, to Thee,\nMore love to Thee,\nMore love to Thee!'
+  const verse2 = 'Once earthly joy I craved,\nSought peace and rest;\nNow Thee alone I seek,\nGive what is best;'
+  const source = `[verse 1]\n${verse1}\nG\nMore love to Thee, O Lord,\nMore love to\nAm-D7\nThee!\n[verse 2]\n${verse2}\n${verse2}\nG\nOnce earthly joy I craved,\nSought peace and\nAm-D7\nrest;\nhttps://www.hymnal.net/Hymns/Hymnal/svg/e0368_p.svg\nAbout Numbered Notation\nDownload PDF\nDownload MIDI`
+  const cleaned = `[verse 1]\n${verse1}\n[verse 2]\n${verse2}`
+  assert.ok(onlyUsesSourceWords(cleaned, source, true))
+  assert.ok(!onlyUsesSourceWords(cleaned, source))
+  assert.ok(!onlyUsesSourceWords(cleaned.replace('O Lord', 'O Christ'), source, true))
+  assert.ok(!onlyUsesSourceWords('[verse 1]\nDownload earnest', source, true))
+  assert.ok(!onlyUsesSourceWords('[verse 1]', source, true))
+  assert.equal(await formatLyricsWithAi({ run: async () => ({ response: cleaned }) }, 'More Love to Thee, O Christ', source), cleaned)
+})
+
 test('fallback keeps eight-line verses intact and cleans redundant slide breaks', () => {
   const source = '1. One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight'
   assert.ok(!normalizeLyricsDraft(source).includes('chorus'))
