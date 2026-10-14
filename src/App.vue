@@ -51,7 +51,9 @@ const importingSongs = ref(false);
 const editingSong = ref<Song | null>(null);
 const formatUndo = ref<string | null>(null);
 const lyricCandidates = ref<LyricCandidate[]>([]);
-const slidePreview = ref<Slide[]>([]);
+const slidePreview = computed(() => editingSong.value
+    ? parseLyrics(editingSong.value.title || "Song title", currentLyrics.value)
+    : []);
 const activeMeeting = ref<Meeting | null>(null);
 const editingMeetingSlides = ref(false);
 const isBusy = ref(false);
@@ -234,7 +236,6 @@ function editSong(song?: Song, updateRoute = true) {
     editingSong.value = song
         ? { ...song, aliases: (song.aliases ?? []).map(alias => ({ ...alias })), lyricsText: songLyrics(song), sourceUrl: song.sourceUrl ?? song.source_url ?? "" }
         : emptySong();
-    slidePreview.value = editingSong.value.title ? parseLyrics(editingSong.value.title, currentLyrics.value) : [];
     page.value = "library";
     activeMeeting.value = null;
     if (updateRoute) setPath(song?.id ? `/library/${song.id}` : "/library/new");
@@ -265,7 +266,6 @@ async function saveSong() {
         const saved = payload(result);
         await loadAppData();
         editingSong.value = { ...saved, lyricsText: songLyrics(saved) };
-        slidePreview.value = parseLyrics(saved.title, songLyrics(saved));
         if (isNew) setPath(`/library/${saved.id}`, { replace: true });
         notice.value = "Song saved.";
     } catch (caught) {
@@ -375,7 +375,6 @@ async function useCandidate(candidate: LyricCandidate) {
             lyricsText: result.lyricsText,
             lyricsSourceName: result.lyricsSourceName,
         };
-        slidePreview.value = parseLyrics(song.title, result.lyricsText);
         notice.value = "Lyrics imported as a draft. Review, then save the song.";
     } catch (caught) {
         error.value = (caught as Error).message;
@@ -404,7 +403,6 @@ async function formatText() {
             formatUndo.value = originalLyrics;
             currentLyrics.value = formatted;
         }
-        slidePreview.value = parseLyrics(song.title, currentLyrics.value);
         notice.value =
             result.provider === "workers-ai"
                 ? "AI formatting applied. Review before saving."
@@ -420,12 +418,6 @@ function undoFormatting() {
     if (formatUndo.value === null) return;
     currentLyrics.value = formatUndo.value;
     formatUndo.value = null;
-    updatePreview();
-}
-
-function updatePreview() {
-    if (editingSong.value)
-        slidePreview.value = parseLyrics(editingSong.value.title || "Song title", currentLyrics.value);
 }
 
 async function addTrustedSource() {
@@ -938,10 +930,10 @@ onBeforeUnmount(() => {
                         </div>
                         <label
                             >Lyrics
-                            <LyricsEditor v-model="currentLyrics" @update:model-value="updatePreview" />
+                            <LyricsEditor v-model="currentLyrics" />
                         </label>
                         <p class="field-help">
-                            Use <code>[verse 1]</code> or <code>[chorus]</code> for a section. A standalone
+                            Use <code>[verse 1]</code> or <code>[chorus]</code> for a section. Blank lines separate stanzas. A standalone
                             <code>|||</code> starts a new slide. Slides never exceed four lines.
                         </p>
                         <button class="button" :disabled="isBusy">{{ isBusy ? "Saving…" : "Save song" }}</button>
@@ -956,7 +948,7 @@ onBeforeUnmount(() => {
                         <div class="slide-thumbnails">
                             <article v-for="(slide, index) in slidePreview" :key="index" class="thumbnail">
                                 <small v-if="slide.section">{{ slide.section }}</small
-                                ><strong v-for="line in slide.lines" :key="line">{{ line }}</strong>
+                                ><strong v-for="(line, lineIndex) in slide.lines" :key="lineIndex">{{ line }}</strong>
                             </article>
                         </div>
                     </section>

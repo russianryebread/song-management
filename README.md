@@ -51,6 +51,8 @@ required for the built-in direct searches. Sites may block automated requests;
 those failures are reported without discarding matches from other sites. Imported lyrics remain an editable draft until you save. Existing lyrics
 require confirmation before replacement, and edits made during a fetch are kept.
 The monospace editor highlights section headers and `|||` slide breaks.
+Blank lines separate stanzas; repeated blank lines or slide breaks never produce
+empty slides. Line breaks are preserved, with at most four lyric lines per slide.
 
 You can also paste lyrics directly and choose **Format with AI**. The deterministic
 fallback recognizes explicit numbered verses and section labels, preserves stanza

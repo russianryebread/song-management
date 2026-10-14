@@ -116,7 +116,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', keydown))
       <div class="presenter-heading">{{ title }}</div>
       <section class="slide" :class="[`slide-${activeSlide.kind}`, `presenter-font-${presenterFont}`]" :style="{ '--text-scale': textScale }">
         <p v-if="activeSlide.section" class="slide-section">{{ activeSlide.section }}</p>
-        <h1 v-for="line in activeSlide.lines" :key="line">{{ line }}</h1>
+        <h1 v-for="(line, lineIndex) in activeSlide.lines" :key="lineIndex">{{ line }}</h1>
       </section>
       <div class="presenter-controls" aria-label="Presenter controls" @click.stop>
         <span class="presenter-count">{{ index + 1 }} / {{ slides.length }}</span>

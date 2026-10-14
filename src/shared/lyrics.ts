@@ -12,9 +12,14 @@ export type ParsedLyrics = {
 const SECTION_HEADER = /^\[([^\]\r\n]+)\]$/
 const SLIDE_BREAK = '|||'
 
+function normalizeLineEndings(text: string): string {
+  return text.replace(/\r\n?|[\u0085\u2028\u2029]/g, '\n')
+}
+
 /**
  * Parses the app's intentionally small, human-editable lyric format.
- * Empty lines are for readability only; `|||` starts the next lyric slide.
+ * Blank lines separate stanzas; `|||` explicitly starts the next lyric slide.
+ * Consecutive boundaries never create empty slides or duplicate lyric lines.
  */
 export function parseSectionedLyrics(lyricsText: string, title?: string): ParsedLyrics {
   const errors: string[] = []
@@ -28,9 +33,9 @@ export function parseSectionedLyrics(lyricsText: string, title?: string): Parsed
     lines = []
   }
 
-  for (const [index, sourceLine] of lyricsText.replace(/\r\n?/g, '\n').split('\n').entries()) {
+  for (const [index, sourceLine] of normalizeLineEndings(lyricsText).split('\n').entries()) {
     const line = sourceLine.trim()
-    if (!line) continue
+    if (!line) { flush(); continue }
 
     const heading = line.match(SECTION_HEADER)
     if (heading) {
@@ -41,7 +46,6 @@ export function parseSectionedLyrics(lyricsText: string, title?: string): Parsed
     }
 
     if (line === SLIDE_BREAK) {
-      if (!lines.length) errors.push(`Line ${index + 1}: ${SLIDE_BREAK} cannot create an empty slide.`)
       flush()
       continue
     }
@@ -68,7 +72,7 @@ export function validateSectionedLyrics(lyricsText: string, title?: string): Par
 
 /** Normalize explicit headings and stanza boundaries without guessing lyric content. */
 export function normalizeLyricsDraft(text: string): string {
-  const normalized = text.replace(/\r\n?/g, '\n').trim()
+  const normalized = normalizeLineEndings(text).trim()
   if (!normalized) return ''
   const output: string[] = []
   let verse = 0
