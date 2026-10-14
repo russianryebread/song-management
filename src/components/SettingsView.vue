@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { AppSettings, UserAccount } from '../api'
 
+const buildCommit = __BUILD_COMMIT__
+
 defineProps<{
   settings: AppSettings
   users: UserAccount[]
@@ -49,4 +51,8 @@ function submitNewUser(event: Event) {
       </form>
     </section>
   </div>
+  <section class="card form-card">
+    <div><p class="eyebrow">VERSION</p><h2>Deployed build</h2></div>
+    <p class="muted">Commit <code class="build-commit">{{ buildCommit }}</code></p>
+  </section>
 </template>
