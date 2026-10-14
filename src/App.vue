@@ -1032,10 +1032,10 @@ onBeforeUnmount(() => {
                                 <span class="position">{{ index + 1 }}</span>
                                 <div>
                                     <strong>{{ song.title }}</strong
-                                    ><small v-if="songNumber(song)">[#{{ songNumber(song) }}]</small
+                                    ><small v-if="songNumber(song)">[#{{ songNumber(song) }}] • </small
                                     ><small>{{
                                         songUses(song)
-                                            ? `Used ${songUses(song)}× · last ${displayDate(songLastUsed(song))}`
+                                            ? `Used ${songUses(song)}× • last ${displayDate(songLastUsed(song))}`
                                             : "Never used"
                                     }}</small>
                                 </div>
