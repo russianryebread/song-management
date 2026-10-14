@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import type { AppSettings, UserAccount } from '../api'
+import type { AppSettings, UserAccount, TrustedSource } from '../api'
+import TrustedSources from './TrustedSources.vue'
 
 const buildCommit = __BUILD_COMMIT__
 
@@ -8,8 +9,14 @@ defineProps<{
   users: UserAccount[]
   currentUserId?: string
   busy: boolean
+  trustedSources: TrustedSource[]
+  newTrustedSource: Pick<TrustedSource, 'name' | 'baseUrl' | 'lyricsSelector'>
 }>()
 const emit = defineEmits<{
+  addTrustedSource: []
+  saveTrustedSource: [source: TrustedSource]
+  toggleTrustedSource: [source: TrustedSource]
+  removeTrustedSource: [source: TrustedSource]
   save: []
   addUser: [value: { email: string; password: string }]
   removeUser: [user: UserAccount]
@@ -50,9 +57,18 @@ function submitNewUser(event: Event) {
         <button class="secondary-button" :disabled="busy">Add administrator</button>
       </form>
     </section>
+    <section class="card form-card">
+        <div><p class="eyebrow">VERSION</p><h2>Deployed build</h2></div>
+        <p class="muted">Commit <code class="build-commit">{{ buildCommit }}</code></p>
+    </section>
   </div>
-  <section class="card form-card">
-    <div><p class="eyebrow">VERSION</p><h2>Deployed build</h2></div>
-    <p class="muted">Commit <code class="build-commit">{{ buildCommit }}</code></p>
-  </section>
+
+  <TrustedSources
+    :trusted-sources="trustedSources"
+    :new-trusted-source="newTrustedSource"
+    @add="emit('addTrustedSource')"
+    @save="emit('saveTrustedSource', $event)"
+    @toggle="emit('toggleTrustedSource', $event)"
+    @remove="emit('removeTrustedSource', $event)"
+  />
 </template>
