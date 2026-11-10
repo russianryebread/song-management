@@ -280,7 +280,6 @@ async function hymnTextFromHtml(html: string, selector: string): Promise<string>
   // Register descendant handling first so it cannot replace the root's end handler.
   rewriter.on("*", {
     element(element) {
-      if (!insideHymn) return;
       if (/^(script|style|noscript|template|button|nav|aside)$/i.test(element.tagName) ||
           element.hasAttribute("hidden") || element.getAttribute("aria-hidden") === "true") {
         // Void elements have no closing tag and cannot contain text.
@@ -290,7 +289,7 @@ async function hymnTextFromHtml(html: string, selector: string): Promise<string>
         }
         return;
       }
-      if (ignoredDepth) return;
+      if (!insideHymn || ignoredDepth) return;
       if (/^(br|p|div|section|article|li|tr|h[1-6]|pre|blockquote|hr)$/i.test(element.tagName)) {
         text += "\n";
         if (!/^(br|hr)$/i.test(element.tagName)) {
@@ -302,12 +301,17 @@ async function hymnTextFromHtml(html: string, selector: string): Promise<string>
       }
     },
   });
-  // Read only the first matching container, including nested elements.
+  // Collect matching blocks in page order. An outer match includes its descendants.
   rewriter.on(selector, {
     element(element) {
-      if (found) return;
+      if (insideHymn || ignoredDepth) return;
       found = true;
       insideHymn = true;
+      text += "\n";
+      const label = element.getAttribute("data-label")?.trim();
+      if (label && /^(verse|chorus|refrain|bridge|intro|outro|tag|ending)(?:\s+\d+)?$/i.test(label)) {
+        text += label + "\n";
+      }
       element.onEndTag(() => { insideHymn = false; });
     },
   });
@@ -332,6 +336,10 @@ async function hymnTextFromHtml(html: string, selector: string): Promise<string>
 }
 
 export async function fetchTrustedText(url: string, sources: TrustedSource[], rawHtml = false): Promise<string> {
+  return (await fetchTrustedContent(url, sources, rawHtml)).text;
+}
+
+async function fetchTrustedContent(url: string, sources: TrustedSource[], rawHtml = false) {
   for (let redirect = 0; redirect <= 5; redirect++) {
     if (!isTrustedUrl(url, sources)) throw new Error("That URL is not enabled in Allowed lookup sites in Settings.");
     const response = await fetch(url, {
@@ -375,11 +383,13 @@ export async function fetchTrustedText(url: string, sources: TrustedSource[], ra
     } finally {
       reader.releaseLock();
     }
-    if (rawHtml) return body;
+    if (rawHtml) return { text: body, usedSelector: false };
     const source = sources.find((source) => source.enabled && normalizedHost(source.base_url) === normalizedHost(url));
-    const text = /html/i.test(type) ? await hymnTextFromHtml(body, source?.lyrics_selector ?? "") : body.trim();
+    const selector = source?.lyrics_selector ?? "";
+    const isHtml = /html/i.test(type);
+    const text = isHtml ? await hymnTextFromHtml(body, selector) : body.trim();
     if (text.length < 20) throw new Error("No usable lyric text was found on that page.");
-    return text;
+    return { text, usedSelector: isHtml && Boolean(selector) };
   }
   throw new Error("The source redirected too many times.");
 }
@@ -1125,15 +1135,17 @@ app.on("POST", ["/api/use-lyric-candidate", "/api/songs/:id/use-lyric-candidate"
   const sourceUrl = stringField(body?.sourceUrl ?? body?.candidateId, "sourceUrl", { required: true, max: 2_000 });
   if (!sourceUrl) return jsonError(c, "A trusted source URL is required.");
   try {
-    const rawText = await fetchTrustedText(sourceUrl, await trustedSources(c.env.DB));
-    const lyricsText = (await formatLyricsWithAi(c.env.AI, song.title, rawText)) ?? normalizeLyricsDraft(rawText);
+    const sources = await trustedSources(c.env.DB);
+    const { text, usedSelector } = await fetchTrustedContent(sourceUrl, sources);
+    const formatted = usedSelector ? null : await formatLyricsWithAi(c.env.AI, song.title, text);
+    const lyricsText = formatted ?? normalizeLyricsDraft(text);
     const parsed = validateSectionedLyrics(lyricsText, song.title);
     if (parsed.errors.length)
       return c.json({ error: "The imported lyrics need review before formatting.", details: parsed.errors }, 422);
     return c.json({
       lyricsText,
       sourceUrl,
-      lyricsSourceName: (await trustedSources(c.env.DB)).find(source => normalizedHost(source.base_url) === normalizedHost(sourceUrl))?.name ?? "trusted import",
+      lyricsSourceName: sources.find(source => normalizedHost(source.base_url) === normalizedHost(sourceUrl))?.name ?? "trusted import",
       slides: parsed.slides,
       requiresReview: true,
     });

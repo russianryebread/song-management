@@ -5,6 +5,21 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { build } from 'esbuild'
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare'
 
+const hymnalUrl = 'https://www.hymnal.net/en/hymn/h/3'
+const verses = [
+  ['Come, Thou Almighty King,', 'Help us Thy name to sing,', 'Help us to praise.', 'Father, all glorious,', 'O’er all victorious,', 'Come, and reign over us,', 'Ancient of Days.'],
+  ['Come, Thou incarnate Word,', 'Gird on Thy mighty sword,', 'Our prayer attend:', 'Come, and Thy people bless,', 'And give Thy word success;', 'Spirit of holiness,', 'On us descend.'],
+  ['Come, holy Comforter,', 'Thy sacred witness bear', 'In this glad hour:', 'Thou who Almighty art,', 'Now rule in every heart,', 'And ne’er from us depart,', 'Spirit of power.'],
+  ['To Thee, great One in Three,', 'Eternal praises be', 'Hence evermore.', 'Thy sov’reign majesty', 'May we in glory see,', 'And to eternity', 'Love and adore.'],
+]
+const hymnalHtml = `<div class="hymn-content"><article class="js-stanzas">${verses.map((lines, index) => `
+  <div data-type="verse" class="verse">
+    <div class="verse-num"><span>${index + 1}</span></div>
+    <div class="text-container">${lines.join('<br>').replaceAll('’', '&#8217;')}</div>
+    <div class="chord-container hidden">${lines.join('<br>')}</div>
+    <div class="chord-container repeat-chord-container hidden"><span class="chord">D</span>${lines[0]}</div>
+  </div>`).join('')}</article><div>Sheet · About Numbered Notation</div></div>`
+
 test('trusted lookup extracts hymn containers in the Workers HTML parser', async (t) => {
   const bundle = await build({
     stdin: {
@@ -22,7 +37,11 @@ test('trusted lookup extracts hymn containers in the Workers HTML parser', async
                 all() { return query('all') }, run() { return query('run') } };
               return statement;
             } };
-            return app.fetch(request, { DB });
+            globalThis.fetch = async (url) => {
+              if (url !== ${JSON.stringify(hymnalUrl)}) throw new Error('Unexpected URL');
+              return new Response(${JSON.stringify(hymnalHtml)}, { headers: { 'content-type': 'text/html' } });
+            };
+            return app.fetch(request, { DB, AI: { run: async () => ({ response: '[verse 1]\\nAncient of Days.' }) } });
           }
           const { url, pages } = await request.json();
           globalThis.fetch = async (url) => {
@@ -93,6 +112,27 @@ test('trusted lookup extracts hymn containers in the Workers HTML parser', async
   assert.equal(await (await lookup(custom, { [custom]: { selector: 'article > .lyrics', body: `<nav>Navigation</nav><article><div class="lyrics">${lyrics}</div></article><footer>Footer</footer>` } })).text(), expected)
   const other = 'https://other.example/hymn'
   assert.equal(await (await lookup(other, { [other]: { body: `<nav>Menu</nav><p>${plain}</p>` } })).text(), plain)
+  await t.test('Hymnal.net imports every plain stanza without AI cleanup', async () => {
+    const response = await runtime.dispatchFetch('https://test.example/api/use-lyric-candidate', {
+      method: 'POST',
+      headers: { Cookie: 'song_session=test', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Come, Thou Almighty King', sourceUrl: hymnalUrl }),
+    })
+    assert.equal(response.status, 200)
+    assert.equal((await response.json() as { lyricsText: string }).lyricsText,
+      verses.map((lines, index) => `[verse ${index + 1}]\n${lines.join('\n')}`).join('\n'))
+  })
+  await t.test('Hymnal.net retains a labeled chorus and its repeated lines', async () => {
+    const selector = sqlite.prepare("SELECT lyrics_selector FROM trusted_sources WHERE id = 'trusted-hymnal-net'").get()?.lyrics_selector
+    const chorus = '<div class="text-container" data-label="Chorus">Sing again<br>Sing again</div>'
+    const body = `<div class="hymn-content"><article class="js-stanzas">
+      <div class="verse">${chorus}</div>
+      <div class="verse js-duplicate-row hidden">${chorus}</div>
+    </article></div>`
+    const response = await lookup(hymnalUrl, { [hymnalUrl]: { body, selector } })
+    assert.equal(response.status, 200)
+    assert.equal(await response.text(), 'Chorus\nSing again\nSing again')
+  })
   await t.test('selector settings persist, validate, clear, and survive enable changes', async () => {
     async function settings(path: string, method = 'GET', body?: object) {
       const response = await runtime.dispatchFetch(`https://test.example/api/trusted-sources${path}`, {
@@ -103,7 +143,7 @@ test('trusted lookup extracts hymn containers in the Workers HTML parser', async
     }
     const defaults = (await settings('')).body.sources
     assert.equal(defaults.find((source: any) => source.id === 'trusted-hymnary').lyricsSelector, '#at_fulltext')
-    assert.equal(defaults.find((source: any) => source.id === 'trusted-hymnal-net').lyricsSelector, '.hymn-content')
+    assert.match(defaults.find((source: any) => source.id === 'trusted-hymnal-net').lyricsSelector, /\.text-container$/)
     const created = await settings('', 'POST', { name: 'Custom', baseUrl: 'https://custom.example', lyricsSelector: '  article > .lyrics  ' })
     assert.equal(created.status, 201)
     assert.equal(created.body.source.lyricsSelector, 'article > .lyrics')

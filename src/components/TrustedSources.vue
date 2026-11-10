@@ -22,7 +22,7 @@ const emit = defineEmits<{
         </div>
     </div>
     <p class="muted">Only page URLs from enabled sources can be fetched and auto-formatted.</p>
-    <p class="muted" id="lyrics-selector-help">Set a lyrics CSS selector such as #at_fulltext or .hymn-content to import only that part of the page. Leave it blank for automatic extraction. If a selector does not match, lookup will ask you to paste the lyrics.</p>
+    <p class="muted" id="lyrics-selector-help">Set a lyrics CSS selector such as #at_fulltext to import matching blocks in page order without AI. Leave it blank for automatic extraction. If a selector does not match, lookup will ask you to paste the lyrics.</p>
     <ul class="trusted-source-list">
         <li v-for="source in trustedSources" :key="source.id">
             <div class="trusted-source-fields">
