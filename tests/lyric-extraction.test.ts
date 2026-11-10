@@ -122,6 +122,12 @@ test('trusted lookup extracts hymn containers in the Workers HTML parser', async
     assert.equal((await response.json() as { lyricsText: string }).lyricsText,
       verses.map((lines, index) => `[verse ${index + 1}]\n${lines.join('\n')}`).join('\n'))
   })
+  await t.test('the old Hymnal.net selector still imports only plain lyrics on the canonical URL', async () => {
+    const response = await lookup(hymnalUrl, { [hymnalUrl]: { body: hymnalHtml, selector: '.hymn-content' } })
+    assert.equal(response.status, 200)
+    assert.equal(await response.text(),
+      verses.flatMap((lines, index) => [String(index + 1), ...lines]).join('\n'))
+  })
   await t.test('Hymnal.net retains a labeled chorus and its repeated lines', async () => {
     const selector = sqlite.prepare("SELECT lyrics_selector FROM trusted_sources WHERE id = 'trusted-hymnal-net'").get()?.lyrics_selector
     const chorus = '<div class="text-container" data-label="Chorus">Sing again<br>Sing again</div>'

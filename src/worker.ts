@@ -339,6 +339,10 @@ export async function fetchTrustedText(url: string, sources: TrustedSource[], ra
   return (await fetchTrustedContent(url, sources, rawHtml)).text;
 }
 
+// Match the default in migration 0009 for databases still using the old setting.
+const hymnalStanza = ".hymn-content .js-stanzas > .verse:not(.js-duplicate-row):not(.hidden)";
+const hymnalPlainLyrics = `${hymnalStanza} > .verse-num, ${hymnalStanza} > .text-container`;
+
 async function fetchTrustedContent(url: string, sources: TrustedSource[], rawHtml = false) {
   for (let redirect = 0; redirect <= 5; redirect++) {
     if (!isTrustedUrl(url, sources)) throw new Error("That URL is not enabled in Allowed lookup sites in Settings.");
@@ -384,8 +388,12 @@ async function fetchTrustedContent(url: string, sources: TrustedSource[], rawHtm
       reader.releaseLock();
     }
     if (rawHtml) return { text: body, usedSelector: false };
-    const source = sources.find((source) => source.enabled && normalizedHost(source.base_url) === normalizedHost(url));
-    const selector = source?.lyrics_selector ?? "";
+    const host = normalizedHost(url);
+    const source = sources.find((source) => source.enabled && normalizedHost(source.base_url) === host);
+    let selector = source?.lyrics_selector ?? "";
+    if (host === "hymnal.net" && selector === ".hymn-content" && /^\/[^/]+\/hymn\//.test(new URL(url).pathname)) {
+      selector = hymnalPlainLyrics;
+    }
     const isHtml = /html/i.test(type);
     const text = isHtml ? await hymnTextFromHtml(body, selector) : body.trim();
     if (text.length < 20) throw new Error("No usable lyric text was found on that page.");
