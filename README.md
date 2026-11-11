@@ -72,8 +72,8 @@ Other sorts retain numbered pagination. Edit alternate titles and first lines be
 the main title in the song editor. Apply migration `0007_alias_kind.sql` before
 running this version against an existing database.
 Meetings lists active meetings above history; `/history` redirects to `/meetings`.
-Usage counts include all linked meeting records, including drafts, consistently
-in the library and meeting details.
+Usage counts include archived meetings and meetings whose decks have been
+published. Unpublished drafts do not affect usage.
 
 Run `npm test` (Node 22.13+ for built-in SQLite) for API and lyric regressions, and
 `npm run build` for type checking and the production frontend build.

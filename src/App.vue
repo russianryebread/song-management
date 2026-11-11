@@ -557,6 +557,12 @@ async function openMeeting(
     }
 }
 
+async function refreshSongUsage() {
+    libraryRevision.value++;
+    const unused = await api<SongListResponse>("/api/songs?filter=unused&pageSize=10");
+    unusedSongs.value = unused.total;
+}
+
 function syncMeetingSummary() {
     const meeting = activeMeeting.value;
     if (!meeting) return;
@@ -582,8 +588,8 @@ async function addSongToMeeting(song: Song) {
             body: JSON.stringify({ songId: song.id }),
         });
         activeMeeting.value = (result as { meeting?: Meeting }).meeting ?? (result as Meeting);
-        libraryRevision.value++;
         syncMeetingSummary();
+        await refreshSongUsage();
     } catch (caught) {
         error.value = (caught as Error).message;
     } finally {
@@ -599,8 +605,8 @@ async function removeMeetingSong(song: MeetingSong) {
     try {
         await api(`/api/meeting-songs/${id}`, { method: "DELETE" });
         activeMeeting.value = await api<Meeting>(`/api/meetings/${meeting.id}`);
-        libraryRevision.value++;
         syncMeetingSummary();
+        await refreshSongUsage();
     } catch (caught) {
         error.value = (caught as Error).message;
     }
@@ -673,6 +679,7 @@ async function updateMeetingStatus(status: Meeting["status"]) {
         const updated = (result as { meeting?: Meeting }).meeting ?? (result as Meeting);
         activeMeeting.value = { ...meeting, ...updated, songs: updated.songs ?? meeting.songs };
         meetings.value = meetings.value.map((item) => (item.id === meeting.id ? { ...item, ...updated } : item));
+        await refreshSongUsage();
         notice.value = `Meeting marked ${status}.`;
     } catch (caught) {
         error.value = (caught as Error).message;

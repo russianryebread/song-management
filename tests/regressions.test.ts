@@ -15,7 +15,7 @@ function fixture(bindings: Record<string, string> = {}) {
   sqlite.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?, ?)').run('session', 'admin', createHash('sha256').update('test').digest('hex'), '2099-01-01', '2026-01-01')
   const insert = sqlite.prepare("INSERT INTO songs (id, title, normalized_title, dedupe_key, hymn_number, lyrics_text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, '', '')")
   for (let i = 0; i < 270; i++) insert.run(`song-${i}`, `Song ${String(i).padStart(3, '0')}`, `song ${String(i).padStart(3, '0')}`, `key-${i}`, String(i), i === 269 ? '[verse 1]\nUnique river of hope' : i % 2 ? '[verse 1]\nA lyric line' : '')
-  sqlite.exec("INSERT INTO meetings VALUES ('historic', '2020-01-01', 'History', 'past', '', NULL, '2020-01-01', '', '')")
+  sqlite.exec("INSERT INTO meetings VALUES ('historic', '2020-01-01', 'History', 'past', '', NULL, NULL, '', '')")
   sqlite.exec("INSERT INTO meeting_songs VALUES ('ms', 'historic', 'song-269', 0, '')")
   sqlite.exec("INSERT INTO meeting_slides VALUES ('slide1', 'ms', 0, 'title', NULL, '[\"Title\"]', '', '')")
   sqlite.exec("INSERT INTO meeting_slides VALUES ('slide2', 'ms', 1, 'lyrics', NULL, '[\"Lyrics\"]', '', '')")
@@ -257,7 +257,7 @@ test('key-free title search extracts direct results and keeps matches when anoth
 })
 
 
-test('draft planning does not change usage until a deck is successfully published', async () => {
+test('usage counts archived meetings and successfully published decks', async () => {
   const { sqlite, request } = fixture()
   try {
     sqlite.exec("INSERT INTO meetings VALUES ('planned', '2026-10-14', 'Plan', 'draft', '', NULL, NULL, '', '')")
@@ -272,12 +272,16 @@ test('draft planning does not change usage until a deck is successfully publishe
         assert.equal(song.lastUsed, date)
       }
       assert.equal(meeting.songs[0].hymnNumber, '269')
-      assert.equal((await request('/api/songs/song-269/history')).body.meetings.length, count)
+      const history = (await request('/api/songs/song-269/history')).body.meetings
+      assert.equal(history.length, count)
+      assert.equal(history[0].meeting_date, date)
     }
     await checkUsage(1, '2020-01-01')
-    sqlite.exec("UPDATE meetings SET status = 'past' WHERE id = 'planned'")
-    await checkUsage(1, '2020-01-01')
-    sqlite.exec("UPDATE meetings SET status = 'draft' WHERE id = 'planned'")
+    const archived = await request('/api/meetings/planned', { status: 'past' }, 'PATCH')
+    assert.equal(archived.status, 200)
+    assert.equal(archived.body.songs[0].useCount, 2)
+    await checkUsage(2, '2026-10-14')
+    assert.equal((await request('/api/meetings/planned', { status: 'draft' }, 'PATCH')).status, 200)
     assert.equal((await request('/api/meetings/planned/publish', {})).status, 422)
     await checkUsage(1, '2020-01-01')
     assert.equal((await request('/api/meetings/planned/slides/regenerate', {})).status, 200)

@@ -499,13 +499,16 @@ async function insertSlides(db: D1Database, meetingSongId: string, slides: Lyric
   if (statements.length) await db.batch(statements);
 }
 
+// Imported history can be archived without ever publishing a deck.
+const countsTowardUsage = "(m.status = 'past' OR m.published_at IS NOT NULL)";
+
 async function songById(db: D1Database, songId: string) {
   return db
     .prepare(
       `SELECT s.*, ${aliasSelect}, COUNT(m.id) AS use_count, MAX(m.meeting_date) AS last_used_at
      FROM songs s
      LEFT JOIN meeting_songs ms ON ms.song_id = s.id
-     LEFT JOIN meetings m ON m.id = ms.meeting_id AND m.published_at IS NOT NULL
+     LEFT JOIN meetings m ON m.id = ms.meeting_id AND ${countsTowardUsage}
      WHERE s.id = ?
      GROUP BY s.id`,
     )
@@ -526,8 +529,8 @@ async function assembleDeck(db: D1Database, meeting: any) {
     .prepare(
       `SELECT ms.id AS meeting_song_id, ms.position AS song_position, s.id AS song_id, s.title,
             s.hymn_number,
-            (SELECT COUNT(*) FROM meeting_songs usage JOIN meetings m ON m.id = usage.meeting_id WHERE usage.song_id = s.id AND m.published_at IS NOT NULL) AS use_count,
-            (SELECT MAX(m.meeting_date) FROM meeting_songs usage JOIN meetings m ON m.id = usage.meeting_id WHERE usage.song_id = s.id AND m.published_at IS NOT NULL) AS last_used_at,
+            (SELECT COUNT(*) FROM meeting_songs usage JOIN meetings m ON m.id = usage.meeting_id WHERE usage.song_id = s.id AND ${countsTowardUsage}) AS use_count,
+            (SELECT MAX(m.meeting_date) FROM meeting_songs usage JOIN meetings m ON m.id = usage.meeting_id WHERE usage.song_id = s.id AND ${countsTowardUsage}) AS last_used_at,
             sl.id AS slide_id, sl.position AS slide_position, sl.kind, sl.section, sl.lines_json
      FROM meeting_songs ms
      JOIN songs s ON s.id = ms.song_id
@@ -794,7 +797,7 @@ app.get("/api/songs", async (c) => {
       : ["used", "recent"].includes(filter)
         ? "HAVING COUNT(m.id) > 0"
         : "";
-  const base = `FROM songs s LEFT JOIN meeting_songs ms ON ms.song_id = s.id LEFT JOIN meetings m ON m.id = ms.meeting_id AND m.published_at IS NOT NULL
+  const base = `FROM songs s LEFT JOIN meeting_songs ms ON ms.song_id = s.id LEFT JOIN meetings m ON m.id = ms.meeting_id AND ${countsTowardUsage}
     ${where} GROUP BY s.id ${having}`;
   if (c.req.query("mode") === "index") {
     const rows = await c.env.DB.prepare(`SELECT s.id, s.title, s.hymn_number, ${aliasSelect},
@@ -967,7 +970,7 @@ app.get("/api/songs/:id/history", async (c) => {
   if (!song) return jsonError(c, "Song not found.", 404);
   const rows = await c.env.DB.prepare(
     `SELECT m.id, m.meeting_date, m.title FROM meeting_songs ms JOIN meetings m ON m.id = ms.meeting_id
-     WHERE ms.song_id = ? AND m.published_at IS NOT NULL ORDER BY m.meeting_date DESC`,
+     WHERE ms.song_id = ? AND ${countsTowardUsage} ORDER BY m.meeting_date DESC`,
   )
     .bind(song.id)
     .all();
